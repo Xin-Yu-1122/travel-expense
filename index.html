@@ -961,37 +961,6 @@ function renderAvatarPicker(){
 
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-// ─── STORAGE ──────────────────────────────────────────────
-// Keys checked for migration (old versions used same key names)
-const LS_KEYS={cfg:'ta-cfg',trips:'ta-trips',cats:'ta-cats'};
-const DRIVE_FILENAME='旅遊記帳本_資料備份.json';
-let DRIVE_FILE_ID=null; // cached Drive file ID
-
-function load(){
-  try{CFG=JSON.parse(localStorage.getItem(LS_KEYS.cfg)||'{}')}catch{CFG={}}
-  try{TRIPS=JSON.parse(localStorage.getItem(LS_KEYS.trips)||'[]')}catch{TRIPS=[]}
-  try{const s=localStorage.getItem(LS_KEYS.cats);CATS=s?JSON.parse(s):[...DEFAULT_CATS]}catch{CATS=[...DEFAULT_CATS]}
-  try{DRIVE_FILE_ID=localStorage.getItem('ta-drive-fid')||null}catch{}
-}
-function save(){
-  try{localStorage.setItem(LS_KEYS.cfg,JSON.stringify(CFG));}catch{}
-  try{localStorage.setItem(LS_KEYS.trips,JSON.stringify(TRIPS));}catch{}
-  try{localStorage.setItem(LS_KEYS.cats,JSON.stringify(CATS));}catch{}
-}
-function buildBackupJson(){
-  return JSON.stringify({_version:4,_saved:new Date().toISOString(),cfg:CFG,trips:TRIPS,cats:CATS},null,2);
-}
-function restoreFromJson(json){
-  try{
-    const d=JSON.parse(json);
-    if(d.cfg)CFG=d.cfg;
-    if(Array.isArray(d.trips))TRIPS=d.trips;
-    if(Array.isArray(d.cats))CATS=d.cats;
-    save();
-    return true;
-  }catch{return false}
-}
-
 // ─── HELPERS ──────────────────────────────────────────────
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).substr(2,5);
 const cat=id=>CATS.find(c=>c.id===id)||CATS[CATS.length-1];
@@ -1014,23 +983,31 @@ function todayStr(){const d=new Date(),p=n=>String(n).padStart(2,'0');return`${d
 function buildBackupJson(){
   return JSON.stringify({_version:5,_saved:new Date().toISOString(),cfg:CFG,trips:TRIPS,cats:CATS},null,2);
 }
-function restoreFromJson(json){
+
+async function restoreFromJson(json){
   try{
     const d=JSON.parse(json);
+    if(!d||(!d.trips&&!d.cats))return false;
     if(d.cfg&&d.cfg.name)CFG.name=d.cfg.name;
-    if(Array.isArray(d.cats))CATS=d.cats;
+    if(Array.isArray(d.cats)&&d.cats.length){CATS=d.cats;await fbSaveCats();}
     if(Array.isArray(d.trips)&&d.trips.length){
-      d.trips.forEach(async t=>{
-        if(TRIPS.find(x=>x.id===t.id))return; // skip existing
+      let done=0;
+      for(const t of d.trips){
         const exps=t.expenses||[];
-        await fbCreateTrip({...t,expenses:[]});
-        for(const e of exps){await fbSaveExpense(t.id,e);}
-      });
-      notify(`✓ 匯入 ${d.trips.length} 個旅程中，請稍候…`);
+        // skip if already exists in Firebase
+        if(!TRIPS.find(x=>x.id===t.id)){
+          await fbCreateTrip({...t,expenses:[]});
+          for(const e of exps){
+            if(e&&e.id)await fbSaveExpense(t.id,e);
+          }
+        }
+        done++;
+        notify(`匯入中… ${done}/${d.trips.length} 個旅程`,'info');
+      }
     }
-    if(fbUser&&Array.isArray(d.cats))fbSaveCats();
-    save();return true;
-  }catch(e){console.warn(e);return false}
+    save();
+    return true;
+  }catch(e){console.error('restoreFromJson error',e);return false;}
 }
 
 function renderUserInfo(){
@@ -1969,11 +1946,16 @@ function downloadBackup(){
 }
 function importBackup(ev){
   const file=ev.target.files[0];if(!file)return;
+  notify('匯入中，請稍候…','info');
   const r=new FileReader();
-  r.onload=e=>{
-    if(restoreFromJson(e.target.result)){
-      renderApp();closeSettings();notify('✓ 備份已匯入');
-    }else notify('匯入失敗：檔案格式不正確','err');
+  r.onload=async e=>{
+    const ok=await restoreFromJson(e.target.result);
+    if(ok){
+      closeSettings();
+      notify('✓ 備份匯入完成！資料同步中…');
+    }else{
+      notify('匯入失敗：檔案格式不正確','err');
+    }
   };
   r.readAsText(file);
   ev.target.value='';
