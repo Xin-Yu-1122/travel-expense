@@ -291,6 +291,11 @@ canvas{flex-shrink:0;display:block}
 .add-cat-row{display:flex;gap:8px;margin-top:12px;align-items:center}
 .color-picker{width:36px;height:36px;padding:2px;border:1px solid var(--border);border-radius:var(--r);cursor:pointer;background:var(--card);flex-shrink:0}
 
+/* Avatar picker */
+.avatar-opt{width:44px;height:44px;border-radius:50%;font-size:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:2px solid transparent;transition:all .15s;background:var(--bg2)}
+.avatar-opt:hover{border-color:var(--accent);transform:scale(1.1)}
+.avatar-opt.selected{border-color:var(--accent);background:var(--bg3);box-shadow:0 0 0 3px rgba(200,89,58,.18)}
+.user-avatar{width:32px;height:32px;border-radius:50%;background:var(--bg2);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;border:2px solid var(--border);cursor:pointer}
 /* NOTIFY */
 .notify{position:fixed;top:16px;left:50%;transform:translateX(-50%);padding:10px 18px;border-radius:20px;font-size:13px;z-index:300;box-shadow:0 4px 16px rgba(0,0,0,.2);white-space:nowrap;pointer-events:none}
 .notify.ok{background:var(--green);color:#fff}
@@ -549,13 +554,41 @@ canvas{flex-shrink:0;display:block}
   <div class="settings-body">
     <div class="settings-section">
       <h3>個人資料</h3>
-      <div class="field"><label>暱稱</label><input class="inp" id="cfg-name" type="text"/></div>
+      <div class="field" style="margin-bottom:12px"><label>暱稱</label><input class="inp" id="cfg-name" type="text"/></div>
+      <label style="font-size:11px;font-weight:700;color:var(--fg3);letter-spacing:.06em;text-transform:uppercase;display:block;margin-bottom:8px">選擇頭像</label>
+      <div id="avatar-picker" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px"></div>
     </div>
 
     <div class="settings-section">
       <h3>帳號</h3>
       <div id="fb-account-info" style="font-size:13px;color:var(--fg3);margin-bottom:12px"></div>
       <button class="btn btn-ghost btn-sm" onclick="fbSignOut()">登出</button>
+    </div>
+
+    <div class="settings-section">
+      <h3>👥 共同編輯</h3>
+      <p style="font-size:13px;color:var(--fg2);line-height:1.8;margin-bottom:14px">邀請同行者一起記帳，資料即時同步。同行者只需：</p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">1</div>
+          <div style="font-size:13px;color:var(--fg2)">用任何裝置打開這個網址：<br><code id="share-url" style="font-size:12px;background:var(--bg2);padding:3px 8px;border-radius:5px;display:inline-block;margin-top:4px;word-break:break-all"></code></div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">2</div>
+          <div style="font-size:13px;color:var(--fg2)">用自己的 <b>Google 帳號</b>登入</div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">3</div>
+          <div style="font-size:13px;color:var(--fg2)">就能看到同樣的旅程，一起輸入記錄，即時同步 ✓</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" onclick="copyShareUrl()">📋 複製網址</button>
+        <button class="btn btn-ghost btn-sm" onclick="shareToLine()">📱 傳給 Line</button>
+      </div>
+      <div style="margin-top:10px;padding:10px 12px;background:var(--bg2);border-radius:8px;font-size:12px;color:var(--fg3);line-height:1.7">
+        ⚠ 目前所有登入同一個網址的人都能看到彼此的旅程。<br>之後版本會加入旅程獨立權限控制。
+      </div>
     </div>
 
     <div class="settings-section">
@@ -670,13 +703,12 @@ canvas{flex-shrink:0;display:block}
 // Firebase Console → 專案設定 → 您的應用程式 → firebaseConfig
 // ════════════════════════════════════════════════════════════
 const firebaseConfig = {
-  apiKey: "AIzaSyCqDm8BNndOFf0acWy-kDMh6TYkegwOx_w",
-  authDomain: "travel-expense-1e48a.firebaseapp.com",
-  databaseURL: "https://travel-expense-1e48a-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "travel-expense-1e48a",
-  storageBucket: "travel-expense-1e48a.firebasestorage.app",
-  messagingSenderId: "10279896816",
-  appId: "1:10279896816:web:43be3ca6136f9ac8dce435"
+  apiKey: "請填入",
+  authDomain: "請填入",
+  projectId: "請填入",
+  storageBucket: "請填入",
+  messagingSenderId: "請填入",
+  appId: "請填入"
 };
 // ════════════════════════════════════════════════════════════
 
@@ -744,7 +776,7 @@ function startRealtimeSync(){
 
   // 載入 profile
   db.collection('users').doc(uid).get().then(doc=>{
-    if(doc.exists){const d=doc.data();if(d.name)CFG.name=d.name;}
+    if(doc.exists){const d=doc.data();if(d.name)CFG.name=d.name;if(d.avatar)CFG.avatar=d.avatar;}
     renderUserInfo();
   });
 }
@@ -765,7 +797,7 @@ async function fbSaveCats(){
 }
 async function fbSaveProfile(name){
   if(!fbUser)return;
-  await db.collection('users').doc(fbUser.uid).set({name,uid:fbUser.uid,email:fbUser.email},{merge:true});
+  await db.collection('users').doc(fbUser.uid).set({name,avatar:CFG.avatar||'🐼',uid:fbUser.uid,email:fbUser.email},{merge:true});
 }
 
 // save() → Firestore, localStorage fallback
@@ -803,6 +835,15 @@ let CFG={},TRIPS=[],CUR_TID=null,CUR_TAB='exp',ADD_CAT='food';
 let EDIT_ID=null;
 let COLLAPSED={};
 let expStatus=null;
+
+const ANIMALS=['🐼','🐨','🦊','🐯','🦁','🐻','🐺','🦝','🐸','🐧','🦜','🦩','🦋','🐙','🦈','🐬','🦄','🐲','🦔','🐿️'];
+
+function getAvatar(){return CFG.avatar||'🐼';}
+function setAvatar(a){CFG.avatar=a;save();if(fbUser)fbSaveProfile(CFG.name);renderUserInfo();renderAvatarPicker();}
+function renderAvatarPicker(){
+  const el=document.getElementById('avatar-picker');if(!el)return;
+  el.innerHTML=ANIMALS.map(a=>`<div class="avatar-opt${getAvatar()===a?' selected':''}" onclick="setAvatar('${a}')">${a}</div>`).join('');
+}
 
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
@@ -879,8 +920,7 @@ function restoreFromJson(json){
 function renderUserInfo(){
   const el=document.getElementById('user-info');if(!el)return;
   if(fbUser){
-    const ini=(fbUser.displayName||'U').charAt(0).toUpperCase();
-    el.innerHTML=`<div class="user-dot" title="${fbUser.email||''}">${ini}</div>`;
+    el.innerHTML=`<div class="user-avatar" onclick="openSettings()" title="${fbUser.email||''}">${getAvatar()}</div>`;
   }else{
     el.innerHTML='';
   }
@@ -1771,13 +1811,31 @@ function saveEditTrip(){
 function openSettings(){
   document.getElementById('settings-panel').classList.remove('hidden');
   document.getElementById('cfg-name').value=CFG.name||'';
+  // Avatar picker
+  renderAvatarPicker();
   // Firebase account info
   const ai=document.getElementById('fb-account-info');
-  if(ai&&fbUser)ai.innerHTML=`<div style="display:flex;align-items:center;gap:10px"><div class="user-dot">${(fbUser.displayName||'U').charAt(0)}</div><div><div style="font-weight:500">${fbUser.displayName||''}</div><div style="color:var(--fg3);font-size:12px">${fbUser.email||''}</div></div></div>`;
+  if(ai&&fbUser)ai.innerHTML=`<div style="display:flex;align-items:center;gap:10px">
+    <div style="font-size:32px">${getAvatar()}</div>
+    <div><div style="font-weight:500;font-size:14px">${fbUser.displayName||''}</div><div style="color:var(--fg3);font-size:12px">${fbUser.email||''}</div></div>
+  </div>`;
+  // Share URL
+  const su=document.getElementById('share-url');
+  if(su)su.textContent=window.location.href.split('?')[0];
   const allExps=TRIPS.reduce((s,t)=>s+t.expenses.length,0);
   document.getElementById('s-trips').textContent=TRIPS.length;
   document.getElementById('s-exps').textContent=allExps;
   renderCatManage();
+}
+
+function copyShareUrl(){
+  const url=window.location.href.split('?')[0];
+  navigator.clipboard.writeText(url).then(()=>notify('網址已複製！')).catch(()=>notify('複製失敗','err'));
+}
+function shareToLine(){
+  const url=window.location.href.split('?')[0];
+  const msg=`一起用旅遊記帳本記帳吧！打開這個網址，用 Google 帳號登入就能共同編輯：${url}`;
+  window.open(`https://line.me/R/share?text=${encodeURIComponent(msg)}`,'_blank');
 }
 
 async function manualSyncUp(){notify('Firebase 版不需要手動同步，資料已即時儲存','info')}
