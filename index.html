@@ -851,7 +851,7 @@ function stopAllSync(){
 
 // ─── CRUD：旅程 ────────────────────────────────────────────
 async function fbCreateTrip(t){
-  if(!fbUser)return;
+  if(!fbUser)throw new Error('未登入');
   const data={
     ...t,
     ownerId:fbUser.uid,
@@ -859,10 +859,16 @@ async function fbCreateTrip(t){
     memberNames:{[fbUser.uid]:CFG.name||fbUser.displayName||'旅行者'},
     memberAvatars:{[fbUser.uid]:CFG.avatar||'🐼'},
     inviteCode:Math.random().toString(36).substr(2,8).toUpperCase(),
-    createdAt:new Date().toISOString()
+    createdAt:t.createdAt||new Date().toISOString()
   };
-  delete data.expenses; // expenses 放子集合
-  await db.collection('trips').doc(t.id).set(data);
+  delete data.expenses;
+  try{
+    await db.collection('trips').doc(t.id).set(data);
+  }catch(e){
+    console.error('fbCreateTrip failed:',e);
+    notify('建立旅程失敗：'+(e.message||e.code),'err');
+    throw e;
+  }
 }
 
 async function fbUpdateTrip(t){
@@ -989,25 +995,41 @@ async function restoreFromJson(json){
     const d=JSON.parse(json);
     if(!d||(!d.trips&&!d.cats))return false;
     if(d.cfg&&d.cfg.name)CFG.name=d.cfg.name;
-    if(Array.isArray(d.cats)&&d.cats.length){CATS=d.cats;await fbSaveCats();}
+    if(Array.isArray(d.cats)&&d.cats.length){
+      CATS=d.cats;
+      try{await fbSaveCats();}catch(e){console.warn('cats save failed',e);}
+    }
     if(Array.isArray(d.trips)&&d.trips.length){
-      let done=0;
+      let done=0, errors=0;
       for(const t of d.trips){
-        const exps=t.expenses||[];
-        // skip if already exists in Firebase
-        if(!TRIPS.find(x=>x.id===t.id)){
-          await fbCreateTrip({...t,expenses:[]});
-          for(const e of exps){
-            if(e&&e.id)await fbSaveExpense(t.id,e);
+        try{
+          if(!TRIPS.find(x=>x.id===t.id)){
+            const exps=t.expenses||[];
+            await fbCreateTrip({...t,expenses:[]});
+            for(const e of exps){
+              if(e&&e.id){
+                try{await fbSaveExpense(t.id,e);}
+                catch(err){console.warn('expense save failed',e.id,err);errors++;}
+              }
+            }
           }
+          done++;
+          notify(`匯入中… ${done}/${d.trips.length} 個旅程`,'info');
+        }catch(e){
+          console.error('trip import failed',t.id,e);
+          errors++;
+          notify(`旅程 ${t.name||t.id} 匯入失敗：${e.message||e.code}`,'err');
         }
-        done++;
-        notify(`匯入中… ${done}/${d.trips.length} 個旅程`,'info');
       }
+      if(errors>0)notify(`匯入完成，但有 ${errors} 筆失敗，請檢查 Firestore 安全規則`,'err');
     }
     save();
     return true;
-  }catch(e){console.error('restoreFromJson error',e);return false;}
+  }catch(e){
+    console.error('restoreFromJson error',e);
+    notify('匯入失敗：'+(e.message||e),'err');
+    return false;
+  }
 }
 
 function renderUserInfo(){
