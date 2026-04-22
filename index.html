@@ -799,44 +799,49 @@ async function fbSaveCats(){
 // ─── 即時同步：旅程清單（我是 member 的旅程）──────────────
 function startTripsSync(){
   if(!fbUser||TRIPS_UNSUB)return;
+  // 注意：不加 orderBy 避免複合索引需求，改前端排序
   TRIPS_UNSUB=db.collection('trips')
     .where(`members.${fbUser.uid}`,'==',true)
-    .orderBy('createdAt','desc')
     .onSnapshot(snap=>{
-      // 更新 trip metadata（不含 expenses，expenses 獨立監聽）
       snap.docChanges().forEach(change=>{
         const data={...change.doc.data(),id:change.doc.id,expenses:[]};
         if(change.type==='added'||change.type==='modified'){
           const idx=TRIPS.findIndex(t=>t.id===data.id);
           if(idx>=0){
-            // 保留已載入的 expenses
             data.expenses=TRIPS[idx].expenses||[];
             TRIPS[idx]=data;
           }else{
             TRIPS.push(data);
-            startExpensesSync(data.id); // 開始監聽這個旅程的消費
+            startExpensesSync(data.id);
           }
         }else if(change.type==='removed'){
           TRIPS=TRIPS.filter(t=>t.id!==change.doc.id);
           stopExpensesSync(change.doc.id);
         }
       });
-      TRIPS.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+      TRIPS.sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
       renderApp();
-    },err=>console.warn('trips sync error',err));
+    },err=>{
+      console.error('trips sync error:',err);
+      notify('資料載入失敗：'+(err.message||err.code),'err');
+    });
 }
 
 function startExpensesSync(tripId){
   if(TRIP_UNSUBS[tripId])return;
   TRIP_UNSUBS[tripId]=db.collection('trips').doc(tripId).collection('expenses')
-    .orderBy('createdAt','asc')
     .onSnapshot(snap=>{
       const t=TRIPS.find(x=>x.id===tripId);
       if(!t)return;
       t.expenses=snap.docs.map(d=>({...d.data(),id:d.id}));
+      // sort expenses by createdAt ascending
+      t.expenses.sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
       if(CUR_TID===tripId)renderTrip();
-      else renderHome(); // 更新首頁總計
-    },err=>console.warn('expenses sync error',err));
+      else renderHome();
+    },err=>{
+      console.error('expenses sync error:',err);
+      notify('消費資料載入失敗：'+(err.message||err.code),'err');
+    });
 }
 
 function stopExpensesSync(tripId){
