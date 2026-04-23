@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#1A2332">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="旅遊記帳">
 <title>旅遊記帳本</title>
@@ -622,7 +623,7 @@ canvas{flex-shrink:0;display:block}
 
     <div class="settings-section">
       <h3>關於</h3>
-      <p style="font-size:13px;color:var(--fg3);line-height:1.8">旅遊記帳本 v5.0 Firebase 版<br>資料存於 Firebase Firestore 雲端資料庫<br>登入 Google 帳號即可跨裝置即時同步</p>
+      <p style="font-size:13px;color:var(--fg3);line-height:1.8" id="about-version-text"></p>
     </div>
     <button class="btn btn-primary btn-full" style="margin-top:4px" onclick="saveSettings()">儲存設定</button>
   </div>
@@ -721,17 +722,18 @@ canvas{flex-shrink:0;display:block}
 // Firebase Console → 專案設定 → 您的應用程式 → firebaseConfig
 // ════════════════════════════════════════════════════════════
 const firebaseConfig = {
-  apiKey: "AIzaSyCqDm8BNndOFf0acWy-kDMh6TYkegwOx_w",
-  authDomain: "travel-expense-1e48a.firebaseapp.com",
-  databaseURL: "https://travel-expense-1e48a-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "travel-expense-1e48a",
-  storageBucket: "travel-expense-1e48a.firebasestorage.app",
-  messagingSenderId: "10279896816",
-  appId: "1:10279896816:web:43be3ca6136f9ac8dce435"
+  apiKey: "請填入",
+  authDomain: "請填入",
+  projectId: "請填入",
+  storageBucket: "請填入",
+  messagingSenderId: "請填入",
+  appId: "請填入"
 };
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
+const APP_VERSION = 'v5.3';
+const APP_VERSION_DATE = '2026/04/22';
 let db, auth, fbUser=null;
 let TRIP_UNSUBS={}; // tripId → expense unsubscribe fn
 let TRIPS_UNSUB=null;
@@ -863,6 +865,7 @@ async function fbCreateTrip(t){
     members:{[fbUser.uid]:true},
     memberNames:{[fbUser.uid]:CFG.name||fbUser.displayName||'旅行者'},
     memberAvatars:{[fbUser.uid]:CFG.avatar||'🐼'},
+    memberEmails:{[fbUser.uid]:fbUser.email||''},
     inviteCode:Math.random().toString(36).substr(2,8).toUpperCase(),
     createdAt:t.createdAt||new Date().toISOString()
   };
@@ -913,19 +916,35 @@ async function checkJoinInvite(){
   // 清除 URL 參數
   window.history.replaceState({},'',window.location.pathname);
   // 搜尋 inviteCode
-  const snap=await db.collection('trips').where('inviteCode','==',code.toUpperCase()).limit(1).get();
-  if(snap.empty){notify('找不到對應的旅程邀請碼','err');return;}
-  const tripDoc=snap.docs[0];
-  const tripId=tripDoc.id;
-  if(tripDoc.data().members?.[fbUser.uid]){notify('你已經是這個旅程的成員了');return;}
-  // 加入 members
-  await db.collection('trips').doc(tripId).update({
-    [`members.${fbUser.uid}`]:true,
-    [`memberNames.${fbUser.uid}`]:CFG.name||fbUser.displayName||'旅行者',
-    [`memberAvatars.${fbUser.uid}`]:CFG.avatar||'🐼',
-  });
-  notify(`✓ 已加入旅程「${tripDoc.data().name}」！`);
-  CUR_TID=tripId;CUR_TAB='exp';
+  try{
+    const snap=await db.collection('trips').where('inviteCode','==',code.toUpperCase()).limit(1).get();
+    if(snap.empty){notify('找不到對應的旅程邀請碼','err');return;}
+    const tripDoc=snap.docs[0];
+    const tripId=tripDoc.id;
+    const tripData=tripDoc.data();
+    if(tripData.members?.[fbUser.uid]){
+      notify('你已經是這個旅程的成員了');
+      CUR_TID=tripId;CUR_TAB='exp';renderApp();
+      return;
+    }
+    const myName=CFG.name||fbUser.displayName||'旅行者';
+    const myAvatar=CFG.avatar||'🐼';
+    const myEmail=fbUser.email||'';
+    // 加入 members（使用 update 搭配 dot notation）
+    await db.collection('trips').doc(tripId).update({
+      [`members.${fbUser.uid}`]:true,
+      [`memberNames.${fbUser.uid}`]:myName,
+      [`memberAvatars.${fbUser.uid}`]:myAvatar,
+      [`memberEmails.${fbUser.uid}`]:myEmail,
+    });
+    notify(`✓ 已加入旅程「${tripData.name}」！`);
+    // 切換到該旅程頁面（等監聽器觸發後會自動渲染）
+    CUR_TID=tripId;CUR_TAB='exp';
+    setTimeout(()=>renderApp(),600);
+  }catch(e){
+    console.error('checkJoinInvite failed',e);
+    notify('加入旅程失敗：'+(e.message||e.code),'err');
+  }
 }
 
 function getInviteLink(t){
@@ -1079,10 +1098,23 @@ function renderHome(){
       const tot=t.expenses.reduce((s,e)=>s+e.amount,0);
       const totTWD=t.expenses.reduce((s,e)=>s+(e.amountTWD||e.amount*t.exchangeRate),0);
       const bp=t.budget?Math.min(tot/t.budget*100,100):0,ov=t.budget&&tot>t.budget;
+      // 成員顯示（大於 1 人才顯示）
+      const memberIds=Object.keys(t.members||{});
+      let membersHtml='';
+      if(memberIds.length>1){
+        const avatars=t.memberAvatars||{},names=t.memberNames||{},emails=t.memberEmails||{};
+        const list=memberIds.map(uid=>{
+          const av=avatars[uid]||'🐼',nm=names[uid]||'成員',em=emails[uid]||'';
+          const tt=em?`${nm}（${em}）`:nm;
+          return`<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--fg2);margin-right:8px;white-space:nowrap" title="${esc(tt)}">${av} ${esc(nm)}</span>`;
+        }).join('');
+        membersHtml=`<div style="padding:6px 0;border-top:1px solid var(--border);margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:2px"><span style="font-size:10px;color:var(--fg3);margin-right:6px">👥 共用</span>${list}</div>`;
+      }
       h+=`<div class="trip-card" onclick="openTrip('${t.id}')">
         <div class="trip-card-top"><div><div class="trip-name">${t.name}</div><div class="trip-meta">${t.country||''}${fTripDateRange(t)?' · '+fTripDateRange(t):''}</div></div>
         <div class="trip-total"><div class="trip-amt">${fA(tot,t.currency)}</div><div class="trip-twd">${fT(totTWD)}</div></div></div>
         ${t.budget?`<div style="margin-top:8px"><div style="height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-bottom:4px"><div style="height:100%;border-radius:2px;background:${ov?'var(--accent)':'var(--blue)'};width:${bp}%;transition:width .4s"></div></div><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--fg3)"><span>預算 ${fA(t.budget,t.currency)} ／ ${fT(t.budget*t.exchangeRate)}</span><span>${Math.round(bp)}% 已用${ov?' ⚠':''}</span></div></div>`:''}
+        ${membersHtml}
         <div class="trip-footer"><span class="trip-count">${t.expenses.length} 筆記錄</span><span class="trip-arrow">›</span></div>
       </div>`;
     });
@@ -1115,11 +1147,17 @@ function renderTrip(){
   const days=[...new Set(t.expenses.map(e=>fDate(e.datetime)).filter(d=>d!=='未知'))].length||1;
   const avgF=tot/days,avgT=totTWD/days;
 
-  const memberCount=Object.keys(t.members||{}).length;
-  const memberAvatars=Object.values(t.memberAvatars||{}).slice(0,4).join(' ');
+  const memberIds=Object.keys(t.members||{});
+  const memberCount=memberIds.length;
+  const memberAvatars=t.memberAvatars||{}, memberNames=t.memberNames||{}, memberEmails=t.memberEmails||{};
+  const memberBadges=memberIds.map(uid=>{
+    const av=memberAvatars[uid]||'🐼',nm=memberNames[uid]||'成員',em=memberEmails[uid]||'';
+    const tt=em?`${nm}（${em}）`:nm;
+    return`<span title="${esc(tt)}" style="display:inline-flex;align-items:center;gap:3px;background:rgba(255,255,255,.12);padding:3px 8px;border-radius:10px;font-size:11px;white-space:nowrap">${av} ${esc(nm)}</span>`;
+  }).join(' ');
   let h=`<div class="trip-header">
     <div class="trip-header-top"><button class="back-btn-dark" onclick="backHome()">← 返回</button><h2>${t.name}</h2><button class="back-btn-dark" onclick="openEditTripModal('${t.id}')" style="font-size:12px;padding:5px 10px">✎ 編輯</button></div>
-    ${memberCount>0?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;opacity:.7"><span>${memberAvatars}</span><span>${memberCount} 位成員</span><button class="back-btn-dark" onclick="openInviteModal('${t.id}')" style="font-size:11px;padding:4px 10px;margin-left:auto">+ 邀請同行者</button></div>`:''}
+    ${memberCount>0?`<div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;flex-wrap:wrap"><span style="font-size:11px;opacity:.6">👥 ${memberCount} 位成員</span>${memberBadges}<button class="back-btn-dark" onclick="openInviteModal('${t.id}')" style="font-size:11px;padding:4px 10px;margin-left:auto">+ 邀請</button></div>`:''}
     <div class="trip-header-stats">
       <div class="stat-box"><div class="stat-label">總消費</div><div class="stat-value">${fA(tot,t.currency)}</div><div class="stat-sub">${fT(totTWD)}</div></div>
       <div class="stat-box"><div class="stat-label">每日平均</div><div class="stat-value">${fA(avgF,t.currency)}</div><div class="stat-sub">${fT(avgT)}・${days} 天</div></div>
@@ -1933,6 +1971,9 @@ function saveEditTrip(){
 function openSettings(){
   document.getElementById('settings-panel').classList.remove('hidden');
   document.getElementById('cfg-name').value=CFG.name||'';
+  // Version info
+  const vt=document.getElementById('about-version-text');
+  if(vt)vt.innerHTML=`旅遊記帳本 <b>${APP_VERSION}</b> Firebase 版<br>最後更新：${APP_VERSION_DATE}<br>資料存於 Firebase Firestore 雲端資料庫<br>登入 Google 帳號即可跨裝置即時同步`;
   // Avatar picker
   renderAvatarPicker();
   // Firebase account info
@@ -2013,11 +2054,37 @@ function delCat(id){
   CATS=CATS.filter(x=>x.id!==id);saveCatsAndSync();renderCatManage();notify('分類已刪除');
 }
 async function clearAll(){
-  if(!confirm('確定要清除所有旅程和記錄嗎？此操作無法復原。'))return;
-  if(fbUser){
-    for(const t of TRIPS){await fbDeleteTripFull(t.id);}
+  if(!confirm('確定要清除這個帳號所有旅程和記錄嗎？\n\n• 你建立的旅程會從所有成員畫面中刪除\n• 別人邀請你的旅程，只會讓你離開，不影響對方\n\n此操作無法復原。'))return;
+  if(!fbUser){CATS=[...DEFAULT_CATS];saveCatsAndSync();CUR_TID=null;closeSettings();notify('資料已清除');return;}
+  notify('清除中…','info');
+  const uid=fbUser.uid;
+  let delCount=0,leaveCount=0,errs=0;
+  for(const t of [...TRIPS]){
+    try{
+      if(t.ownerId===uid){
+        // 我建立的：整個刪除
+        await fbDeleteTripFull(t.id);
+        delCount++;
+      }else{
+        // 別人的：只把我從 members 移除
+        const updates={};
+        updates[`members.${uid}`]=firebase.firestore.FieldValue.delete();
+        updates[`memberNames.${uid}`]=firebase.firestore.FieldValue.delete();
+        updates[`memberAvatars.${uid}`]=firebase.firestore.FieldValue.delete();
+        await db.collection('trips').doc(t.id).update(updates);
+        leaveCount++;
+      }
+    }catch(e){console.error('clearAll trip',t.id,e);errs++;}
   }
-  CATS=[...DEFAULT_CATS];saveCatsAndSync();CUR_TID=null;closeSettings();notify('資料已清除');
+  // 清空使用者設定
+  try{
+    await db.collection('users').doc(uid).collection('config').doc('cats').delete();
+  }catch{}
+  CATS=[...DEFAULT_CATS];save();CUR_TID=null;closeSettings();
+  let msg=`✓ 已清除：${delCount} 個自建旅程`;
+  if(leaveCount)msg+=`、離開 ${leaveCount} 個共用旅程`;
+  if(errs)msg+=`（${errs} 筆失敗）`;
+  notify(msg);
 }
 
 // ─── INVITE MODAL ─────────────────────────────────────────
@@ -2027,11 +2094,15 @@ function openInviteModal(tripId){
   const t=TRIPS.find(x=>x.id===tripId);if(!t)return;
   const link=getInviteLink(t);
   document.getElementById('invite-link-box').textContent=link;
-  // show members
+  // show members with email
   const names=t.memberNames||{};
   const avatars=t.memberAvatars||{};
+  const emails=t.memberEmails||{};
   document.getElementById('invite-members').innerHTML=
-    Object.entries(names).map(([uid,name])=>`<span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px">${avatars[uid]||'🐼'} ${name}</span>`).join('');
+    Object.entries(names).map(([uid,name])=>{
+      const em=emails[uid]||'';
+      return`<div style="display:flex;align-items:center;gap:6px;padding:3px 0"><span style="font-size:16px">${avatars[uid]||'🐼'}</span><span style="font-weight:500">${esc(name)}</span>${em?`<span style="color:var(--fg3);font-size:11px">${esc(em)}</span>`:''}</div>`;
+    }).join('');
   document.getElementById('invite-modal').classList.remove('hidden');
 }
 function closeInviteModal(){document.getElementById('invite-modal').classList.add('hidden')}
