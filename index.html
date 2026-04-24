@@ -40,6 +40,16 @@
 [data-theme="dark"] .pie-canvas-wrap canvas+div.canvas-tooltip{background:var(--card)}
 [data-theme="dark"] .donut-container canvas~*{filter:none}
 [data-theme="dark"] .app-shell{background:var(--card)}
+[data-theme="dark"] .trip-header{background:#252525}
+[data-theme="dark"] .home-kv{background:linear-gradient(135deg,#252525 55%,#2F2F2F)}
+[data-theme="dark"] .stat-card{background:#2A2A2A;border-color:#3A3A3A}
+[data-theme="dark"] .chart-wrap{background:#222;border-color:#333}
+[data-theme="dark"] .trip-card{background:#222;border-color:#333}
+[data-theme="dark"] .export-card{background:#222;border-color:#333}
+[data-theme="dark"] .settle-card{background:#222;border-color:#333}
+[data-theme="dark"] .settings-section{border-color:#333}
+[data-theme="dark"] .back-btn-dark{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.15)}
+[data-theme="dark"] .budget-full-card{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.1)}
 body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--fg);min-height:100vh;font-size:14px}
 .hidden{display:none!important}
 
@@ -793,7 +803,7 @@ const firebaseConfig = {
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
-const APP_VERSION = 'v5.5';
+const APP_VERSION = 'v5.6';
 const APP_VERSION_DATE = '2026/04/24';
 let db, auth, fbUser=null;
 
@@ -1289,6 +1299,7 @@ function renderTrip(){
   document.getElementById('main-content').innerHTML=h;
 
   if(CUR_TAB==='ana'){drawPie(t);drawDayBars(t);}
+  if(CUR_TAB==='settle')initBatchScope();
   document.querySelectorAll('[data-del]').forEach(b=>b.onclick=e=>{e.stopPropagation();delExp(b.dataset.del)});
   document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=e=>{e.stopPropagation();openEditExp(b.dataset.edit)});
   document.querySelectorAll('[data-day]').forEach(hdr=>hdr.onclick=()=>toggleDay(hdr.dataset.day));
@@ -2415,10 +2426,91 @@ function renderSettlement(t){
     <span style="font-size:18px">${d.toAvatar}</span><span>${d.toName}</span>
     <span class="settle-amt">${fA(d.amount,t.currency)}<br><span style="font-size:11px;font-weight:400;color:var(--fg3)">${fT(d.amount*t.exchangeRate)}</span></span>
   </div>`).join(''):'<p style="text-align:center;color:var(--green);padding:8px">✓ 不需要轉帳，已結清！</p>';
+
+  // batch edit: count expenses without split data
+  const noSplit=t.expenses.filter(e=>!e.paidBy||!e.splitAmong).length;
+  const totalExp=t.expenses.length;
+
+  // paidBy dropdown options
+  const paidByOpts=memberIds.map(uid=>`<option value="${uid}">${avatars[uid]||'🐼'} ${esc(names[uid]||'成員')}</option>`).join('');
+  // splitAmong checkboxes
+  const splitChks=memberIds.map(uid=>`<div class="split-chk active" data-buid="${uid}" onclick="this.classList.toggle('active')">${avatars[uid]||'🐼'} ${esc(names[uid]||'')}</div>`).join('');
+
+  const batchSection=canEdit(t)?`<div class="settle-card">
+    <h3 style="margin-bottom:6px;font-size:15px">⚡ 批次設定分帳</h3>
+    <p style="font-size:12px;color:var(--fg3);margin-bottom:14px;line-height:1.7">
+      一次更新多筆記錄的分帳設定，不用逐筆修改。<br>
+      ${noSplit>0?`<span style="color:var(--accent)">有 ${noSplit}/${totalExp} 筆尚未設定分帳</span>`:`<span style="color:var(--green)">✓ 全部 ${totalExp} 筆都已設定分帳</span>`}
+    </p>
+    <div class="field" style="margin-bottom:10px">
+      <label style="font-size:12px;font-weight:600;margin-bottom:4px;display:block">套用範圍</label>
+      <select class="inp" id="batch-scope">
+        ${noSplit>0?`<option value="unset">僅尚未設定的 ${noSplit} 筆</option>`:''}
+        <option value="all">全部 ${totalExp} 筆</option>
+        <option value="date">指定日期</option>
+      </select>
+    </div>
+    <div class="field hidden" id="batch-date-wrap" style="margin-bottom:10px">
+      <label style="font-size:12px;font-weight:600;margin-bottom:4px;display:block">選擇日期</label>
+      <select class="inp" id="batch-date">${[...new Set(t.expenses.map(e=>fDate(e.datetime)).filter(d=>d!=='未知'))].sort().map(d=>`<option value="${d}">${d}</option>`).join('')}</select>
+    </div>
+    <div class="field" style="margin-bottom:10px">
+      <label style="font-size:12px;font-weight:600;margin-bottom:4px;display:block">誰付的錢？</label>
+      <select class="inp" id="batch-paidby">${paidByOpts}</select>
+    </div>
+    <div class="field" style="margin-bottom:14px">
+      <label style="font-size:12px;font-weight:600;margin-bottom:6px;display:block">哪些人分攤？</label>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${splitChks}</div>
+    </div>
+    <button class="btn btn-primary btn-full" onclick="batchSetSplit()">套用分帳設定</button>
+  </div>`:'';
+
   return`<div class="export-content">
+    ${batchSection}
     <div class="settle-card"><h3 style="margin-bottom:10px;font-size:15px">每人摘要</h3>${memberRows}</div>
     <div class="settle-card"><h3 style="margin-bottom:10px;font-size:15px">💸 結算轉帳</h3>${debtRows}</div>
   </div>`;
+}
+
+// ─── BATCH SPLIT EDIT ─────────────────────────────────────
+function initBatchScope(){
+  const sel=document.getElementById('batch-scope');
+  const dw=document.getElementById('batch-date-wrap');
+  if(!sel||!dw)return;
+  sel.onchange=()=>{dw.classList.toggle('hidden',sel.value!=='date');};
+}
+async function batchSetSplit(){
+  const t=trip();if(!t||!fbUser)return;
+  const scope=document.getElementById('batch-scope')?.value||'all';
+  const paidBy=document.getElementById('batch-paidby')?.value||fbUser.uid;
+  const activeEls=document.querySelectorAll('[data-buid].active');
+  const splitAmong=[...activeEls].map(el=>el.dataset.buid).filter(Boolean);
+  if(!splitAmong.length){notify('請至少選擇一位分攤成員','err');return;}
+  
+  // filter expenses by scope
+  let targets=[];
+  if(scope==='unset')targets=t.expenses.filter(e=>!e.paidBy||!e.splitAmong);
+  else if(scope==='date'){
+    const d=document.getElementById('batch-date')?.value;
+    targets=t.expenses.filter(e=>fDate(e.datetime)===d);
+  }else targets=[...t.expenses];
+
+  if(!targets.length){notify('沒有符合條件的記錄','err');return;}
+  if(!confirm(`確定要將 ${targets.length} 筆記錄套用分帳設定？\n\n付款人：${(t.memberNames||{})[paidBy]||'成員'}\n分攤：${splitAmong.map(uid=>(t.memberNames||{})[uid]||'成員').join('、')}`))return;
+
+  notify(`批次更新中… 0/${targets.length}`,'info');
+  let done=0,errs=0;
+  for(const e of targets){
+    try{
+      e.paidBy=paidBy;
+      e.splitAmong=splitAmong;
+      await fbSaveExpense(t.id,e);
+      done++;
+      if(done%10===0)notify(`批次更新中… ${done}/${targets.length}`,'info');
+    }catch(err){console.warn('batch save err',e.id,err);errs++;}
+  }
+  notify(`✓ 已更新 ${done} 筆${errs?`（${errs} 筆失敗）`:''}`);
+  renderTrip();
 }
 
 // ─── PERMISSION CONTROL ───────────────────────────────────
