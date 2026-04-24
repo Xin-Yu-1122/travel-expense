@@ -50,6 +50,10 @@
 [data-theme="dark"] .settings-section{border-color:#333}
 [data-theme="dark"] .back-btn-dark{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.15)}
 [data-theme="dark"] .budget-full-card{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.1)}
+[data-theme="dark"] .fab-option-label{background:#3A3A3A;color:#E8E6E1}
+[data-theme="dark"] .fab-option:hover .fab-option-label{background:#4A4A4A}
+[data-theme="dark"] .fab-option-dot{background:#2A2A2A;border-color:#444;color:#E8E6E1}
+[data-theme="dark"] .fab.closing,.fab[style*="background"]{background:var(--accent)!important}
 body{font-family:'Noto Sans TC',sans-serif;background:var(--bg);color:var(--fg);min-height:100vh;font-size:14px}
 .hidden{display:none!important}
 
@@ -165,6 +169,7 @@ select.inp{cursor:pointer}
 .fab{width:54px;height:54px;border-radius:50%;background:var(--accent);color:#fff;border:none;font-size:24px;cursor:pointer;box-shadow:0 4px 18px rgba(200,89,58,.45);display:flex;align-items:center;justify-content:center;transition:all .25s;line-height:1;flex-shrink:0}
 .fab:hover{background:var(--accent2)}
 .fab.open{transform:rotate(45deg);background:var(--fg)}
+[data-theme="dark"] .fab.open{background:#444}
 .fab-menu{display:flex;flex-direction:column;align-items:flex-end;gap:10px;overflow:hidden;max-height:0;opacity:0;pointer-events:none;transition:max-height .28s ease,opacity .2s}
 .fab-menu.open{max-height:200px;opacity:1;pointer-events:auto}
 .fab-option{display:flex;align-items:center;gap:10px;cursor:pointer;border:none;background:none;padding:0;font-family:inherit}
@@ -803,8 +808,8 @@ const firebaseConfig = {
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
-const APP_VERSION = 'v5.6';
-const APP_VERSION_DATE = '2026/04/24';
+const APP_VERSION = 'v5.7';
+const APP_VERSION_DATE = '2026/04/25';
 let db, auth, fbUser=null;
 
 // ─── 深色模式 ──────────────────────────────────────────────
@@ -1682,21 +1687,43 @@ async function exportSheets(){
     const TOKEN=result.credential.accessToken;
     if(!TOKEN)throw new Error('無法取得 Google 授權');
     // Create spreadsheet
+    const memberNames=t.memberNames||{};
+    const memberIds=Object.keys(t.members||{});
+    const hasMulti=memberIds.length>1;
     const title=`${t.name} 旅遊消費記錄`;
     const hdrs=[['消費日期','店家名稱','商品名稱',`金額（${t.currency}）`,'金額（TWD）','分類','付款方式','地點','備註']];
-    const rows=t.expenses.map(e=>[fDate(e.datetime),e.storeName||'',e.nameZh||'',Math.round(e.amount),Math.round(e.amountTWD||e.amount*t.exchangeRate),cat(e.category).n,e.paymentMethod||'',e.location||'',e.notes||'']);
+    if(hasMulti)hdrs[0].push('付款人','分攤人');
+    const rows=t.expenses.map(e=>{
+      const row=[fDate(e.datetime),e.storeName||'',e.nameZh||'',Math.round(e.amount),Math.round(e.amountTWD||e.amount*t.exchangeRate),cat(e.category).n,e.paymentMethod||'',e.location||'',e.notes||''];
+      if(hasMulti){
+        row.push(memberNames[e.paidBy]||memberNames[e.lastEditBy]||'');
+        row.push((e.splitAmong||memberIds).map(uid=>memberNames[uid]||'').join('、'));
+      }
+      return row;
+    });
     const tot=t.expenses.reduce((s,e)=>s+e.amount,0);
     const totTWD=t.expenses.reduce((s,e)=>s+(e.amountTWD||e.amount*t.exchangeRate),0);
     rows.push(['','','合計',Math.round(tot),Math.round(totTWD),'','','','']);
     const tots={};const totsTWD={};
     t.expenses.forEach(e=>{tots[e.category]=(tots[e.category]||0)+e.amount;totsTWD[e.category]=(totsTWD[e.category]||0)+(e.amountTWD||e.amount*t.exchangeRate)});
     const anaRows=[['分類',`金額（${t.currency}）`,'金額（TWD）','佔比'],...Object.entries(tots).sort((a,b)=>b[1]-a[1]).map(([id,amt])=>[cat(id).n,Math.round(amt),Math.round(totsTWD[id]||0),(tot>0?Math.round(amt/tot*100):0)+'%'])];
-    const cr=await fetch('https://sheets.googleapis.com/v4/spreadsheets',{method:'POST',headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'},body:JSON.stringify({properties:{title},sheets:[{properties:{sheetId:0,title:'消費明細'}},{properties:{sheetId:1,title:'分類統計'}}]})});
+    const sheets=[{properties:{sheetId:0,title:'消費明細'}},{properties:{sheetId:1,title:'分類統計'}}];
+    if(hasMulti)sheets.push({properties:{sheetId:2,title:'分帳結算'}});
+    const cr=await fetch('https://sheets.googleapis.com/v4/spreadsheets',{method:'POST',headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'},body:JSON.stringify({properties:{title},sheets})});
     const sheet=await cr.json();
     if(!sheet.spreadsheetId)throw new Error(sheet.error?.message||'建立失敗');
     const sid=sheet.spreadsheetId;
-    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sid}/values/消費明細!A1:I${rows.length+1}?valueInputOption=RAW`,{method:'PUT',headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'},body:JSON.stringify({values:[...hdrs,...rows]})});
+    const colEnd=hasMulti?'K':'I';
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sid}/values/消費明細!A1:${colEnd}${rows.length+1}?valueInputOption=RAW`,{method:'PUT',headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'},body:JSON.stringify({values:[...hdrs,...rows]})});
     await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sid}/values/分類統計!A1:D${anaRows.length}?valueInputOption=RAW`,{method:'PUT',headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'},body:JSON.stringify({values:anaRows})});
+    // Settlement sheet
+    if(hasMulti){
+      const debts=calcSettlement(t);
+      const settleRows=[['轉帳方','收款方',`金額（${t.currency}）`,'金額（TWD）']];
+      debts.forEach(d=>settleRows.push([d.fromName,d.toName,d.amount,Math.round(d.amount*t.exchangeRate)]));
+      if(!debts.length)settleRows.push(['✓ 不需要轉帳','已結清','','']);
+      await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sid}/values/分帳結算!A1:D${settleRows.length}?valueInputOption=RAW`,{method:'PUT',headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'},body:JSON.stringify({values:settleRows})});
+    }
     const url=`https://docs.google.com/spreadsheets/d/${sid}`;
     expStatus={type:'ok',msg:`✓ 試算表已建立！<a href="${url}" target="_blank" style="color:var(--blue)">點此開啟 →</a>`};
     notify('Google 試算表建立成功！');
@@ -1712,11 +1739,36 @@ async function exportSheets(){
 function exportCSV(){
   const t=trip();
   if(!t||!t.expenses.length){notify('沒有記錄可匯出','err');return}
+  const names=t.memberNames||{};
+  const memberIds=Object.keys(t.members||{});
+  const hasMulti=memberIds.length>1;
   const hdr=['消費日期','店家名稱','商品名稱',`金額（${t.currency}）`,'金額（TWD）','分類','付款方式','地點','備註'];
-  const rows=t.expenses.map(e=>[fDate(e.datetime),e.storeName||'',e.nameZh||'',Math.round(e.amount),Math.round(e.amountTWD||e.amount*t.exchangeRate),cat(e.category).n,e.paymentMethod||'',e.location||'',e.notes||''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+  if(hasMulti){hdr.push('付款人','分攤人');}
+  const rows=t.expenses.map(e=>{
+    const row=[fDate(e.datetime),e.storeName||'',e.nameZh||'',Math.round(e.amount),Math.round(e.amountTWD||e.amount*t.exchangeRate),cat(e.category).n,e.paymentMethod||'',e.location||'',e.notes||''];
+    if(hasMulti){
+      row.push(names[e.paidBy]||names[e.lastEditBy]||'');
+      row.push((e.splitAmong||memberIds).map(uid=>names[uid]||'').join('、'));
+    }
+    return row.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',');
+  });
   const tot=t.expenses.reduce((s,e)=>s+e.amount,0);
   const totTWD=t.expenses.reduce((s,e)=>s+(e.amountTWD||e.amount*t.exchangeRate),0);
-  rows.push([`"","","合計","${Math.round(tot)}","${Math.round(totTWD)}","","","",""`]);
+  const emptyCols=hasMulti?',"",""':'';
+  rows.push(`"","","合計","${Math.round(tot)}","${Math.round(totTWD)}","","","",""${emptyCols}`);
+  // Add settlement summary for multi-member
+  if(hasMulti){
+    rows.push('');
+    rows.push('"","","=== 分帳結算 ==="');
+    const debts=calcSettlement(t);
+    if(debts.length){
+      debts.forEach(d=>{
+        rows.push(`"","","${d.fromName} → ${d.toName}","${d.amount}","${Math.round(d.amount*t.exchangeRate)}"`);
+      });
+    }else{
+      rows.push('"","","✓ 不需要轉帳，已結清"');
+    }
+  }
   const csv='\uFEFF'+[hdr.map(v=>`"${v}"`).join(','),...rows].join('\n');
   const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
   Object.assign(document.createElement('a'),{href:url,download:`${t.name}_消費記錄.csv`}).click();
@@ -1730,7 +1782,21 @@ function copyReport(){
   const tots={};const totsTWD={};
   t.expenses.forEach(e=>{tots[e.category]=(tots[e.category]||0)+e.amount;totsTWD[e.category]=(totsTWD[e.category]||0)+(e.amountTWD||e.amount*t.exchangeRate)});
   const lines=Object.entries(tots).sort((a,b)=>b[1]-a[1]).map(([id,amt])=>`  ${cat(id).n}：${fA(amt,t.currency)}（${fT(totsTWD[id]||0)}）`).join('\n');
-  const txt=`【${t.name} 消費摘要】\n總消費：${fA(tot,t.currency)}（${fT(totTWD)}）\n筆數：${t.expenses.length} 筆\n匯率：1 ${t.currency} = ${t.exchangeRate} TWD\n\n分類統計：\n${lines}`;
+  let txt=`【${t.name} 消費摘要】\n總消費：${fA(tot,t.currency)}（${fT(totTWD)}）\n筆數：${t.expenses.length} 筆\n匯率：1 ${t.currency} = ${t.exchangeRate} TWD\n\n分類統計：\n${lines}`;
+  // settlement
+  const memberIds=Object.keys(t.members||{});
+  if(memberIds.length>1){
+    const names=t.memberNames||{};
+    const debts=calcSettlement(t);
+    txt+='\n\n💸 分帳結算：';
+    if(debts.length){
+      debts.forEach(d=>{
+        txt+=`\n  ${d.fromName} → ${d.toName}：${fA(d.amount,t.currency)}（${fT(d.amount*t.exchangeRate)}）`;
+      });
+    }else{
+      txt+='\n  ✓ 不需要轉帳，已結清！';
+    }
+  }
   navigator.clipboard.writeText(txt).then(()=>notify('摘要已複製！')).catch(()=>notify('複製失敗','err'));
 }
 
@@ -2413,11 +2479,18 @@ function renderSettlement(t){
   });
   const memberRows=memberIds.map(uid=>{
     const diff=paid[uid]-shared[uid];
-    return`<div class="settle-row">
+    const diffTWD=diff*t.exchangeRate;
+    return`<div class="settle-row" style="flex-wrap:wrap">
       <span style="font-size:18px">${avatars[uid]||'🐼'}</span>
-      <span style="flex:1">${esc(names[uid]||'成員')}</span>
-      <span style="font-size:11px;color:var(--fg3)">付 ${fA(paid[uid],t.currency)} / 應分 ${fA(Math.round(shared[uid]),t.currency)}</span>
-      <span style="font-weight:600;min-width:60px;text-align:right;color:${diff>0?'var(--green)':'var(--accent)'}">${diff>0?'+':''}${fA(Math.round(diff),t.currency)}</span>
+      <span style="flex:1;min-width:60px">${esc(names[uid]||'成員')}</span>
+      <div style="font-size:11px;color:var(--fg3);text-align:right;line-height:1.6">
+        付 ${fA(paid[uid],t.currency)}（${fT(paid[uid]*t.exchangeRate)}）<br>
+        應分 ${fA(Math.round(shared[uid]),t.currency)}（${fT(Math.round(shared[uid]*t.exchangeRate))}）
+      </div>
+      <div style="font-weight:600;min-width:80px;text-align:right;color:${diff>0?'var(--green)':'var(--accent)'}">
+        ${diff>0?'+':''}${fA(Math.round(diff),t.currency)}<br>
+        <span style="font-size:11px;font-weight:400">${diff>0?'+':''}${fT(Math.round(diffTWD))}</span>
+      </div>
     </div>`;
   }).join('');
   const debtRows=debts.length?debts.map(d=>`<div class="settle-row">
