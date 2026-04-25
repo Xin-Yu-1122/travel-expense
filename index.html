@@ -9,6 +9,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="旅遊記帳">
 <link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
 <title>旅遊記帳本</title>
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -730,6 +733,12 @@ canvas{flex-shrink:0;display:block}
     </div>
 
     <div class="settings-section">
+      <h3>📱 安裝應用程式</h3>
+      <p style="font-size:13px;color:var(--fg3);line-height:1.7;margin-bottom:12px">將記帳本加到手機主畫面，像原生 APP 一樣使用</p>
+      <button class="btn btn-primary btn-sm" onclick="triggerInstall()">📲 加到主畫面</button>
+    </div>
+
+    <div class="settings-section">
       <h3>關於</h3>
       <p style="font-size:13px;color:var(--fg3);line-height:1.8" id="about-version-text"></p>
     </div>
@@ -854,7 +863,7 @@ const firebaseConfig = {
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
-const APP_VERSION = 'v6.0';
+const APP_VERSION = 'v6.1';
 const APP_VERSION_DATE = '2026/04/25';
 let db, auth, fbUser=null;
 
@@ -2942,24 +2951,48 @@ document.getElementById('app').classList.add('hidden');
 
 // ─── PWA: Service Worker + Install Prompt ─────────────────
 let deferredPrompt=null;
+let isPwaInstalled=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone;
+const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
+const isAndroid=/android/i.test(navigator.userAgent);
 
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('./sw.js').then(reg=>{
-    console.log('SW registered',reg.scope);
-  }).catch(err=>console.warn('SW registration failed',err));
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('./sw.js').then(reg=>{
+      console.log('[PWA] Service Worker 已註冊：',reg.scope);
+    }).catch(err=>console.warn('[PWA] SW 註冊失敗：',err));
+  });
+}else{
+  console.warn('[PWA] 此瀏覽器不支援 Service Worker');
 }
 
 window.addEventListener('beforeinstallprompt',e=>{
+  console.log('[PWA] 收到安裝事件，可以安裝了');
   e.preventDefault();
   deferredPrompt=e;
   const dismissed=localStorage.getItem('pwa-dismissed');
   if(!dismissed||Date.now()-parseInt(dismissed)>7*24*60*60*1000){
-    setTimeout(()=>{
-      const banner=document.getElementById('pwa-banner');
-      if(banner)banner.classList.remove('hidden');
-    },3000);
+    setTimeout(showInstallBanner,2000);
   }
 });
+
+function showInstallBanner(){
+  if(isPwaInstalled)return;
+  const banner=document.getElementById('pwa-banner');
+  if(!banner)return;
+  // iOS 顯示手動安裝指示
+  if(isIOS&&!deferredPrompt){
+    banner.innerHTML=`
+      <span class="pwa-banner-icon">📱</span>
+      <div class="pwa-banner-text">
+        <b>安裝到主畫面</b>
+        點底部「分享」按鈕 <span style="display:inline-block;border:1px solid var(--border);padding:0 4px;border-radius:3px">⬆</span> → 「加入主畫面」
+      </div>
+      <div class="pwa-banner-btns">
+        <button class="btn btn-ghost btn-sm" onclick="dismissPwaBanner()">知道了</button>
+      </div>`;
+  }
+  banner.classList.remove('hidden');
+}
 
 function installPwa(){
   const banner=document.getElementById('pwa-banner');
@@ -2970,6 +3003,8 @@ function installPwa(){
       if(result.outcome==='accepted')notify('✓ 已安裝到主畫面！');
       deferredPrompt=null;
     });
+  }else{
+    notify('安裝功能尚未就緒，請從瀏覽器選單手動安裝','err');
   }
 }
 
@@ -2980,11 +3015,41 @@ function dismissPwaBanner(){
 }
 
 window.addEventListener('appinstalled',()=>{
+  isPwaInstalled=true;
   const banner=document.getElementById('pwa-banner');
   if(banner)banner.classList.add('hidden');
   deferredPrompt=null;
   notify('✓ 旅遊記帳本已安裝！');
 });
+
+// 從設定中觸發
+function triggerInstall(){
+  if(isPwaInstalled){notify('已經安裝了！','info');return;}
+  if(deferredPrompt){
+    installPwa();
+  }else if(isIOS){
+    showInstallBanner();
+  }else{
+    let msg='【無法直接觸發安裝】\n\n可能原因：\n';
+    if(!('serviceWorker' in navigator))msg+='• 瀏覽器不支援 PWA\n';
+    if(window.location.protocol!=='https:')msg+='• 必須使用 HTTPS\n';
+    msg+='\n💡 試試：\n';
+    if(isAndroid)msg+='• Chrome 選單（︙）→ 安裝應用程式\n';
+    else msg+='• 瀏覽器網址列右側找安裝圖示\n• 或使用 Chrome／Edge 開啟\n';
+    msg+='• Chrome 需要在站上互動 30 秒以上才會出現安裝按鈕';
+    alert(msg);
+  }
+}
+
+// iOS 5 秒後顯示手動指示
+setTimeout(()=>{
+  if(!deferredPrompt&&isIOS&&!isPwaInstalled){
+    const dismissed=localStorage.getItem('pwa-dismissed');
+    if(!dismissed||Date.now()-parseInt(dismissed)>7*24*60*60*1000){
+      showInstallBanner();
+    }
+  }
+},5000);
 </script>
 </body>
 </html>
