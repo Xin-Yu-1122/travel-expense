@@ -20,6 +20,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Noto+Serif+TC:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="" defer></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -443,6 +445,12 @@ canvas{flex-shrink:0;display:block}
     <button class="btn btn-primary btn-sm" onclick="saveExpense()">儲存</button>
   </div>
   <div class="add-body">
+    <div class="form-section" id="template-section" style="display:none">
+      <h3>📋 快速套用範本</h3>
+      <div id="template-list" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px"></div>
+      <p style="font-size:11px;color:var(--fg3)">點選範本即套用商品名稱、店家、金額、分類</p>
+    </div>
+
     <div class="form-section">
       <h3>商品資訊</h3>
       <div class="field">
@@ -453,6 +461,7 @@ canvas{flex-shrink:0;display:block}
         <label>店家名稱 <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--fg3)">(選填)</span></label>
         <input class="inp" id="f-st" placeholder="店家名稱"/>
       </div>
+      <div style="margin-top:8px"><button type="button" class="btn btn-ghost btn-sm" onclick="saveAsTemplate()" style="font-size:11px;padding:4px 10px">⭐ 存為範本</button></div>
     </div>
 
     <div class="form-section">
@@ -620,7 +629,11 @@ canvas{flex-shrink:0;display:block}
       </div>
       <div class="field">
         <label>匯率（1 外幣 = ? TWD）</label>
-        <input class="inp" id="t-rate" type="number" value="0.22" step="0.001"/>
+        <div style="display:flex;gap:6px">
+          <input class="inp" id="t-rate" type="number" value="0.22" step="0.001" style="flex:1"/>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="fetchRate('t')" id="t-fetch-rate" style="white-space:nowrap;padding:0 10px">🔄 即時匯率</button>
+        </div>
+        <div id="t-rate-info" style="font-size:11px;color:var(--fg3);margin-top:4px"></div>
       </div>
     </div>
     <div class="field" style="margin-bottom:12px">
@@ -789,6 +802,10 @@ canvas{flex-shrink:0;display:block}
         <label>匯率（1 外幣 = ? TWD）</label>
         <input class="inp" id="et-rate" type="number" step="0.001"/>
       </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="fetchRate('et')" id="et-fetch-rate" style="font-size:12px;padding:4px 10px">🔄 取得即時匯率</button>
+      </div>
+      <div id="et-rate-info" style="font-size:11px;color:var(--fg3);margin-top:4px"></div>
     </div>
     <div class="field" style="margin-bottom:12px">
       <label>旅遊預算（選填）</label>
@@ -809,6 +826,16 @@ canvas{flex-shrink:0;display:block}
       <button class="btn btn-ghost btn-full" onclick="closeEditTripModal()">取消</button>
       <button class="btn btn-primary btn-full" onclick="saveEditTrip()">儲存</button>
     </div>
+  </div>
+</div>
+
+<!-- COMPARE MODAL -->
+<div class="modal-overlay hidden" id="compare-modal" onclick="if(event.target===this)closeCompareModal()">
+  <div class="modal" style="max-width:600px;max-height:90vh;overflow-y:auto">
+    <div class="modal-handle"></div>
+    <h2>📊 跨旅程比較</h2>
+    <div id="compare-body" style="margin-top:14px"></div>
+    <button class="btn btn-ghost btn-full" style="margin-top:14px" onclick="closeCompareModal()">關閉</button>
   </div>
 </div>
 
@@ -863,7 +890,7 @@ const firebaseConfig = {
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
-const APP_VERSION = 'v6.2';
+const APP_VERSION = 'v6.4';
 const APP_VERSION_DATE = '2026/04/25';
 let db, auth, fbUser=null;
 
@@ -1141,6 +1168,28 @@ let CFG={},TRIPS=[],CUR_TID=null,CUR_TAB='exp',ADD_CAT='food';
 let EDIT_ID=null;
 let COLLAPSED={};
 let expStatus=null;
+let EXP_VIEW='grouped'; // 'grouped' or 'timeline'
+let EXP_SEARCH=''; // search query
+function setExpView(v){EXP_VIEW=v;renderTrip();}
+function setExpSearch(v){EXP_SEARCH=v;renderTrip();setTimeout(()=>{const inp=document.getElementById('exp-search-inp');if(inp){inp.focus();inp.setSelectionRange(inp.value.length,inp.value.length);}},10);}
+function clearExpSearch(){EXP_SEARCH='';renderTrip();}
+function expMatchesSearch(e,q){
+  if(!q)return true;
+  const lc=q.toLowerCase();
+  return(e.nameZh||'').toLowerCase().includes(lc)
+    ||(e.nameJa||'').toLowerCase().includes(lc)
+    ||(e.storeName||'').toLowerCase().includes(lc)
+    ||(e.location||'').toLowerCase().includes(lc)
+    ||(e.notes||'').toLowerCase().includes(lc)
+    ||(e.paymentMethod||'').toLowerCase().includes(lc)
+    ||cat(e.category).n.toLowerCase().includes(lc);
+}
+function highlightSearch(text,q){
+  if(!q||!text)return esc(text);
+  const safe=esc(text);
+  const safeQ=esc(q).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  return safe.replace(new RegExp(safeQ,'gi'),m=>`<mark style="background:#FFE082;padding:0 2px;border-radius:2px">${m}</mark>`);
+}
 
 const ANIMALS=['🐼','🐨','🦊','🐯','🦁','🐻','🐺','🦝','🐸','🐧','🦜','🦩','🦋','🐙','🦈','🐬','🦄','🐲','🦔','🐿️'];
 
@@ -1252,6 +1301,7 @@ function renderHome(){
   let h=`<div class="content">
     ${recoveryBanner}
     <div class="home-kv"><h2>${CFG.name||''}的旅行足跡</h2><div class="sub">${TRIPS.length} 個旅程・${totalExps} 筆消費</div><div class="kv-lbl">累計總消費（台幣）</div><div class="kv-val">NT$${Math.round(grand).toLocaleString()}</div></div>
+    ${TRIPS.length>=2?`<div style="margin-bottom:14px;text-align:center"><button class="btn btn-ghost btn-sm" onclick="openCompareModal()">📊 跨旅程比較</button></div>`:''}
     <div class="section-label">我的旅程</div>`;
   if(!TRIPS.length){
     h+=`<div class="empty-state"><div class="empty-icon">🗺</div><p>還沒有旅程<br>點右下角 <strong>+</strong> 新增第一個旅程</p></div>`;
@@ -1285,8 +1335,8 @@ function renderHome(){
   document.getElementById('main-content').innerHTML=h;
 }
 
-function openTrip(id){CUR_TID=id;CUR_TAB='exp';COLLAPSED={};renderApp()}
-function backHome(){CUR_TID=null;renderApp()}
+function openTrip(id){CUR_TID=id;CUR_TAB='exp';COLLAPSED={};EXP_SEARCH='';renderApp()}
+function backHome(){CUR_TID=null;EXP_SEARCH='';renderApp()}
 
 function renderTrip(){
   const t=trip();if(!t)return;
@@ -1329,7 +1379,36 @@ function renderTrip(){
       <div class="stat-box"><div class="stat-label">總消費</div><div class="stat-value">${fA(tot,t.currency)}</div><div class="stat-sub">${fT(totTWD)}</div></div>
       <div class="stat-box"><div class="stat-label">每日平均</div><div class="stat-value">${fA(avgF,t.currency)}</div><div class="stat-sub">${fT(avgT)}・${days} 天</div></div>
     </div>
-    ${t.budget?`<div class="budget-full-card">
+    ${t.budget?(()=>{
+      // Calculate daily budget tracking
+      let dailyHtml='';
+      if(t.startDate&&t.endDate){
+        const start=new Date(t.startDate),end=new Date(t.endDate),today=new Date();
+        const totalDays=Math.max(1,Math.round((end-start)/86400000)+1);
+        const daysPassed=Math.min(totalDays,Math.max(0,Math.round((today-start)/86400000)+1));
+        const remainingDays=Math.max(1,totalDays-daysPassed+1);
+        const dailyBudget=t.budget/totalDays;
+        const todayStr2=todayStr();
+        const todayExp=t.expenses.filter(e=>fDate(e.datetime)===todayStr2).reduce((s,e)=>s+e.amount,0);
+        const remainBudget=t.budget-tot;
+        const dailyAllowance=remainBudget>0?remainBudget/remainingDays:0;
+        // Only show if trip is ongoing
+        if(today>=new Date(start.getTime()-86400000)&&today<=new Date(end.getTime()+86400000)){
+          const overToday=todayExp>dailyAllowance&&dailyAllowance>0;
+          dailyHtml=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);font-size:11px;line-height:1.7">
+            <div style="display:flex;justify-content:space-between;opacity:.85">
+              <span>今日已花</span>
+              <span style="color:${overToday?'#E8724E':'inherit'};font-weight:500">${fA(todayExp,t.currency)} ／ ${fT(todayExp*t.exchangeRate)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;opacity:.85;margin-top:3px">
+              <span>剩餘 ${remainingDays} 天，每日可花</span>
+              <span style="font-weight:500">${fA(Math.round(dailyAllowance),t.currency)} ／ ${fT(Math.round(dailyAllowance*t.exchangeRate))}</span>
+            </div>
+            ${overToday?`<div style="margin-top:6px;padding:6px 10px;background:rgba(232,114,78,.18);border-radius:6px;color:#FFB8A0;font-size:11px">⚠ 今日已超出每日預算 ${fA(Math.round(todayExp-dailyAllowance),t.currency)}</div>`:''}
+          </div>`;
+        }
+      }
+      return`<div class="budget-full-card">
       <div class="budget-full-top">
         <span class="budget-full-label">旅遊預算</span>
         <div style="text-align:right">
@@ -1342,7 +1421,9 @@ function renderTrip(){
         <span>已花費 ${fA(tot,t.currency)}（${Math.round(tot/t.budget*100)}%）</span>
         <span class="${tot>t.budget?'over-text':''}">剩餘 ${fA(Math.max(0,t.budget-tot),t.currency)} ／ ${fT(Math.max(0,t.budget-tot)*t.exchangeRate)}</span>
       </div>
-    </div>`:''}
+      ${dailyHtml}
+    </div>`;
+    })():''}
   </div>
   <div class="tabs">
     <button class="tab-btn ${CUR_TAB==='exp'?'active':''}" onclick="switchTab('exp')">消費明細</button>
@@ -1358,7 +1439,7 @@ function renderTrip(){
 
   document.getElementById('main-content').innerHTML=h;
 
-  if(CUR_TAB==='ana'){drawPie(t);drawDayBars(t);}
+  if(CUR_TAB==='ana'){drawPie(t);drawDayBars(t);drawMap(t);}
   if(CUR_TAB==='settle')initBatchScope();
   document.querySelectorAll('[data-del]').forEach(b=>b.onclick=e=>{e.stopPropagation();delExp(b.dataset.del)});
   document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=e=>{e.stopPropagation();openEditExp(b.dataset.edit)});
@@ -1375,12 +1456,113 @@ function toggleStore(key){COLLAPSED['s:'+key]=!COLLAPSED['s:'+key];renderTrip()}
 
 function renderExpenses(t){
   if(!t.expenses.length)return`<div class="exp-content"><div class="empty-state"><div class="empty-icon">🧾</div><p>還沒有消費記錄<br>點右下角 <strong>+</strong> 新增第一筆</p></div></div>`;
-  // Group by date → store, respecting saved order
+
+  // Search bar
+  const q=EXP_SEARCH;
+  const searchBar=`<div style="padding:0 16px 12px">
+    <div style="position:relative">
+      <input type="text" class="inp" id="exp-search-inp" placeholder="🔍 搜尋商品、店家、地點、備註…" value="${esc(q)}" oninput="setExpSearch(this.value)" style="padding-right:36px"/>
+      ${q?`<button onclick="clearExpSearch()" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);width:24px;height:24px;border-radius:50%;border:none;background:var(--bg3);color:var(--fg2);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center">×</button>`:''}
+    </div>
+  </div>`;
+
+  // Filter expenses
+  const filtered=q?t.expenses.filter(e=>expMatchesSearch(e,q)):t.expenses;
+
+  // Search result summary
+  let summaryBar='';
+  if(q){
+    const filteredTot=filtered.reduce((s,e)=>s+e.amount,0);
+    const filteredTotTWD=filtered.reduce((s,e)=>s+(e.amountTWD||e.amount*t.exchangeRate),0);
+    if(!filtered.length){
+      summaryBar=`<div style="padding:24px 16px;text-align:center;color:var(--fg3)">
+        <div style="font-size:32px;margin-bottom:8px">🔍</div>
+        <div>找不到符合「${esc(q)}」的記錄</div>
+      </div>`;
+    }else{
+      // Count by store for price-comparison hint
+      const byStore={};
+      filtered.forEach(e=>{
+        const k=e.storeName||'(無店家)';
+        if(!byStore[k])byStore[k]={count:0,total:0,minAmt:Infinity,maxAmt:0};
+        byStore[k].count++;
+        byStore[k].total+=e.amount;
+        byStore[k].minAmt=Math.min(byStore[k].minAmt,e.amount);
+        byStore[k].maxAmt=Math.max(byStore[k].maxAmt,e.amount);
+      });
+      const storeCount=Object.keys(byStore).length;
+      const minPrice=Math.min(...filtered.map(e=>e.amount));
+      const maxPrice=Math.max(...filtered.map(e=>e.amount));
+      const priceCompareHint=filtered.length>1&&minPrice<maxPrice?`<div style="margin-top:6px;font-size:11px;color:var(--blue)">💡 比價：最低 ${fA(minPrice,t.currency)} ↔ 最高 ${fA(maxPrice,t.currency)}（差 ${fA(maxPrice-minPrice,t.currency)}）</div>`:'';
+      summaryBar=`<div style="margin:0 16px 12px;padding:10px 14px;background:var(--bg2);border-radius:8px;font-size:12px">
+        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+          <span style="color:var(--fg2)">找到 <b>${filtered.length}</b> 筆${storeCount>1?`・<b>${storeCount}</b> 家店`:''}</span>
+          <span style="font-weight:600">${fA(filteredTot,t.currency)}（${fT(filteredTotTWD)}）</span>
+        </div>
+        ${priceCompareHint}
+      </div>`;
+    }
+  }
+
+  // View mode toggle
+  const viewToggle=`<div style="display:flex;gap:6px;padding:0 16px 12px;flex-wrap:wrap;align-items:center">
+    <span style="font-size:11px;color:var(--fg3);margin-right:4px">檢視：</span>
+    <button class="split-mode-btn ${EXP_VIEW==='grouped'?'active':''}" onclick="setExpView('grouped')" style="font-size:11px;padding:4px 10px">📦 日期分組</button>
+    <button class="split-mode-btn ${EXP_VIEW==='timeline'?'active':''}" onclick="setExpView('timeline')" style="font-size:11px;padding:4px 10px">📋 時間軸</button>
+  </div>`;
+
+  // No matches early return
+  if(q&&!filtered.length){
+    return searchBar+summaryBar;
+  }
+
+  // Timeline view (or auto-switch when searching)
+  if(EXP_VIEW==='timeline'||q){
+    const sorted=[...filtered].sort((a,b)=>(b.datetime||'').localeCompare(a.datetime||''));
+    let lastDate='';
+    let h2=searchBar+summaryBar+viewToggle+'<div class="exp-content" style="padding-top:0"><div style="position:relative">';
+    sorted.forEach(e=>{
+      const date=fDate(e.datetime);
+      const c=cat(e.category);
+      const showDateHeader=date!==lastDate;
+      lastDate=date;
+      const memberInfo=t.members&&Object.keys(t.members).length>1&&e.paidBy?`<span style="font-size:10px;color:var(--fg3);background:var(--bg2);padding:1px 6px;border-radius:8px;margin-left:6px">${(t.memberAvatars||{})[e.paidBy]||'🐼'} ${(t.memberNames||{})[e.paidBy]||'?'}</span>`:'';
+      const photoIcon=e.photoURL?`<span style="font-size:11px;margin-left:4px" title="有發票照片">📷</span>`:'';
+      if(showDateHeader)h2+=`<div style="font-size:12px;color:var(--fg3);font-weight:600;padding:14px 0 6px;letter-spacing:.05em">${date}</div>`;
+      h2+=`<div class="timeline-row" style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);align-items:flex-start">
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.c};margin-top:6px;flex-shrink:0"></span>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:2px">
+            <span style="font-weight:500;font-size:14px">${highlightSearch(e.nameZh||'',q)}${photoIcon}</span>
+            <span style="font-weight:600;color:var(--fg);white-space:nowrap">${fA(e.amount,t.currency)}</span>
+          </div>
+          <div style="font-size:11px;color:var(--fg3);display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+            <span>${highlightSearch(e.storeName||'',q)}</span>
+            ${e.storeName?`<span>·</span>`:''}
+            <span>${c.n}</span>
+            <span>·</span>
+            <span>${fT(e.amountTWD||e.amount*t.exchangeRate)}</span>
+            ${e.location?`<span>·</span><span>📍 ${highlightSearch(e.location,q)}</span>`:''}
+            ${memberInfo}
+          </div>
+          ${e.notes?`<div style="font-size:11px;color:var(--fg3);margin-top:2px">📝 ${highlightSearch(e.notes,q)}</div>`:''}
+          ${canEdit(t)?`<div style="margin-top:4px;display:flex;gap:8px">
+            <button class="exp-act-btn exp-edit-btn" data-edit="${e.id}" style="font-size:11px">編輯</button>
+            <button class="exp-act-btn exp-del-btn" data-del="${e.id}" style="font-size:11px">刪除</button>
+          </div>`:''}
+        </div>
+      </div>`;
+    });
+    h2+='</div></div>';
+    return h2;
+  }
+
+  // Grouped view (original) - q is empty here
   const byDate={};
-  [...t.expenses].sort((a,b)=>fDate(b.datetime).localeCompare(fDate(a.datetime)))
+  [...filtered].sort((a,b)=>fDate(b.datetime).localeCompare(fDate(a.datetime)))
     .forEach(e=>{const k=fDate(e.datetime);if(!byDate[k])byDate[k]=[];byDate[k].push(e)});
 
-  let h='<div class="exp-content" id="exp-list">';
+  let h=searchBar+viewToggle+'<div class="exp-content" style="padding-top:0" id="exp-list">';
   Object.entries(byDate).sort((a,b)=>b[0].localeCompare(a[0])).forEach(([date,exps])=>{
     const dt=exps.reduce((s,e)=>s+e.amount,0);
     const dtTWD=exps.reduce((s,e)=>s+(e.amountTWD||e.amount*t.exchangeRate),0);
@@ -1597,6 +1779,15 @@ function renderAnalysis(t){
     <div class="chart-wrap" id="day-bar-wrap">
       <div class="chart-title">每日消費走勢</div>
       <div style="position:relative"><canvas id="day-chart" width="400" height="100"></canvas><div class="canvas-tooltip hidden" id="day-tip"></div></div>
+    </div>
+    <div class="chart-wrap" id="map-wrap">
+      <div class="chart-title">📍 消費地點地圖</div>
+      <div id="trip-map" style="height:300px;border-radius:8px;background:var(--bg2);position:relative;overflow:hidden">
+        <div id="map-placeholder" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--fg3);font-size:13px;text-align:center;padding:20px">
+          載入地圖中…
+        </div>
+      </div>
+      <div id="map-legend" style="font-size:11px;color:var(--fg3);margin-top:8px;line-height:1.6"></div>
     </div>
   </div>`;
 }
@@ -1948,6 +2139,7 @@ function openAdd(){
   document.getElementById('add-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
   renderSplitFields();
+  renderTemplates();
 }
 
 function openEditExp(id){
@@ -2425,7 +2617,103 @@ async function clearAll(){
   notify(msg);
 }
 
-// ─── PHOTO UPLOAD (Firebase Storage) ──────────────────────
+// ─── 即時匯率查詢 ──────────────────────────────────────────
+async function fetchRate(prefix){
+  const curEl=document.getElementById(prefix+'-cur');
+  const rateEl=document.getElementById(prefix+'-rate');
+  const infoEl=document.getElementById(prefix+'-rate-info');
+  const btn=document.getElementById(prefix+'-fetch-rate');
+  if(!curEl||!rateEl)return;
+  const cur=curEl.value;
+  if(cur==='TWD'){notify('已是台幣，不需換算','info');return;}
+  if(btn){btn.disabled=true;btn.textContent='查詢中…';}
+  try{
+    // 使用免費 API: https://open.er-api.com (no API key needed)
+    const r=await fetch(`https://open.er-api.com/v6/latest/${cur}`);
+    const d=await r.json();
+    if(d.result==='success'&&d.rates&&d.rates.TWD){
+      const rate=d.rates.TWD;
+      rateEl.value=rate.toFixed(4);
+      const updated=d.time_last_update_utc?new Date(d.time_last_update_utc).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+      if(infoEl)infoEl.innerHTML=`✓ 1 ${cur} = ${rate.toFixed(4)} TWD${updated?`（更新時間：${updated}）`:''}`;
+      // trigger budget hint refresh
+      if(typeof updateBudgetHint==='function')updateBudgetHint(prefix);
+      notify('匯率已更新');
+    }else throw new Error('API 回傳格式異常');
+  }catch(e){
+    console.warn('fetchRate failed',e);
+    if(infoEl)infoEl.innerHTML=`<span style="color:var(--accent)">查詢失敗，請手動填入</span>`;
+    notify('匯率查詢失敗：'+e.message,'err');
+  }
+  if(btn){btn.disabled=false;btn.textContent=prefix==='t'?'🔄 即時匯率':'🔄 取得即時匯率';}
+}
+function getTemplates(){
+  try{return JSON.parse(localStorage.getItem('ta-templates')||'[]');}catch{return[];}
+}
+function saveTemplates(list){
+  try{localStorage.setItem('ta-templates',JSON.stringify(list.slice(0,12)));}catch{}
+}
+function saveAsTemplate(){
+  const name=document.getElementById('f-zh').value.trim();
+  if(!name){notify('請先填入商品名稱','err');return;}
+  const tpl={
+    id:'tpl_'+Date.now().toString(36),
+    name,
+    storeName:document.getElementById('f-st').value.trim(),
+    amount:parseFloat(document.getElementById('f-am').value)||0,
+    priceMode:document.querySelector('.mode-btn.active')?.id==='mode-tax-in'?'taxIn':document.querySelector('.mode-btn.active')?.id==='mode-tax-out'?'taxOut':'twd',
+    category:ADD_CAT,
+    paymentMethod:document.getElementById('f-pm')?.value||'',
+    location:document.getElementById('f-lo')?.value||'',
+  };
+  const list=getTemplates();
+  // dedupe by name
+  const filtered=list.filter(t=>t.name!==name);
+  filtered.unshift(tpl);
+  saveTemplates(filtered);
+  notify(`✓ 已存為範本「${name}」`);
+  renderTemplates();
+}
+function applyTemplate(id){
+  const tpl=getTemplates().find(t=>t.id===id);
+  if(!tpl)return;
+  document.getElementById('f-zh').value=tpl.name;
+  document.getElementById('f-st').value=tpl.storeName||'';
+  document.getElementById('f-am').value=tpl.amount||'';
+  if(tpl.priceMode)setPriceMode(tpl.priceMode);
+  ADD_CAT=tpl.category||'food';
+  if(tpl.paymentMethod){const pm=document.getElementById('f-pm');if(pm)pm.value=tpl.paymentMethod;}
+  if(tpl.location){const lo=document.getElementById('f-lo');if(lo)lo.value=tpl.location;}
+  renderCatChips();
+  updateAmtPreview();
+  notify(`✓ 已套用範本「${tpl.name}」`);
+}
+function deleteTemplate(id,evt){
+  if(evt){evt.stopPropagation();}
+  const list=getTemplates();
+  const tpl=list.find(t=>t.id===id);
+  if(!tpl)return;
+  if(!confirm(`確定刪除範本「${tpl.name}」？`))return;
+  saveTemplates(list.filter(t=>t.id!==id));
+  renderTemplates();
+}
+function renderTemplates(){
+  const list=getTemplates();
+  const sec=document.getElementById('template-section');
+  const wrap=document.getElementById('template-list');
+  if(!sec||!wrap)return;
+  if(!list.length){sec.style.display='none';return;}
+  sec.style.display='block';
+  wrap.innerHTML=list.map(tpl=>{
+    const t=trip();
+    const amt=t?fA(tpl.amount,tpl.priceMode==='twd'?'TWD':t.currency):tpl.amount;
+    return`<div class="split-chk" onclick="applyTemplate('${tpl.id}')" style="position:relative;padding-right:24px">
+      <span style="font-weight:500">${esc(tpl.name)}</span>
+      <span style="color:var(--fg3);font-size:11px;margin-left:4px">${amt}</span>
+      <span onclick="deleteTemplate('${tpl.id}',event)" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:16px;height:16px;border-radius:50%;background:var(--bg3);color:var(--fg3);font-size:10px;display:flex;align-items:center;justify-content:center;cursor:pointer">×</span>
+    </div>`;
+  }).join('');
+}
 let PHOTO_FILE=null, PHOTO_URL=null;
 function previewPhoto(ev){
   const file=ev.target.files[0];if(!file)return;
@@ -2862,6 +3150,214 @@ function getRoleLabel(role){
   if(role==='viewer')return'👁 僅檢視';
   return'✏ 可編輯';
 }
+
+// ─── 消費地點地圖 ──────────────────────────────────────────
+let MAP_INSTANCE=null;
+const GEOCODE_CACHE={};
+function loadGeocodeCache(){
+  try{Object.assign(GEOCODE_CACHE,JSON.parse(localStorage.getItem('ta-geocache')||'{}'));}catch{}
+}
+function saveGeocodeCache(){
+  try{localStorage.setItem('ta-geocache',JSON.stringify(GEOCODE_CACHE));}catch{}
+}
+loadGeocodeCache();
+
+async function geocode(query){
+  if(!query)return null;
+  const k=query.trim().toLowerCase();
+  if(GEOCODE_CACHE[k])return GEOCODE_CACHE[k];
+  try{
+    const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`);
+    const d=await r.json();
+    if(d&&d[0]){
+      const result={lat:parseFloat(d[0].lat),lon:parseFloat(d[0].lon)};
+      GEOCODE_CACHE[k]=result;
+      saveGeocodeCache();
+      return result;
+    }
+  }catch(e){console.warn('geocode failed',query,e);}
+  return null;
+}
+
+async function drawMap(t){
+  const wrap=document.getElementById('trip-map');
+  const placeholder=document.getElementById('map-placeholder');
+  const legend=document.getElementById('map-legend');
+  if(!wrap)return;
+  // Wait for Leaflet
+  if(typeof L==='undefined'){
+    if(placeholder)placeholder.textContent='地圖元件載入中…';
+    setTimeout(()=>drawMap(t),500);
+    return;
+  }
+  // Group expenses by location
+  const locGroups={};
+  t.expenses.forEach(e=>{
+    if(!e.location||!e.location.trim())return;
+    const k=e.location.trim();
+    if(!locGroups[k])locGroups[k]={count:0,total:0,items:[]};
+    locGroups[k].count++;
+    locGroups[k].total+=e.amount;
+    locGroups[k].items.push(e);
+  });
+  const locKeys=Object.keys(locGroups);
+  if(!locKeys.length){
+    if(placeholder){
+      placeholder.innerHTML=`<div style="font-size:32px;margin-bottom:8px">📍</div>
+        <div>沒有地點資訊可顯示</div>
+        <div style="font-size:11px;color:var(--fg3);margin-top:6px">記帳時填入「地點」欄位即可在此顯示</div>`;
+    }
+    if(legend)legend.innerHTML='';
+    return;
+  }
+  if(placeholder)placeholder.innerHTML='搜尋地點座標中…';
+
+  // Build country hint for geocoding accuracy
+  const country=t.country||'';
+
+  // Geocode each location (with country hint)
+  const points=[];
+  for(const loc of locKeys){
+    const result=await geocode(country?`${loc} ${country}`:loc)||await geocode(loc);
+    if(result)points.push({...result,name:loc,...locGroups[loc]});
+    // small delay to be nice to Nominatim
+    await new Promise(r=>setTimeout(r,150));
+  }
+
+  if(!points.length){
+    if(placeholder)placeholder.innerHTML=`<div style="font-size:32px;margin-bottom:8px">📍</div>
+      <div>找不到任何地點座標</div>
+      <div style="font-size:11px;color:var(--fg3);margin-top:6px">試試填入更明確的地點（如「東京晴空塔」）</div>`;
+    return;
+  }
+
+  if(placeholder)placeholder.style.display='none';
+
+  // Initialize map
+  if(MAP_INSTANCE){MAP_INSTANCE.remove();MAP_INSTANCE=null;}
+  MAP_INSTANCE=L.map('trip-map').setView([points[0].lat,points[0].lon],11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    attribution:'© OpenStreetMap',maxZoom:19
+  }).addTo(MAP_INSTANCE);
+
+  // Add markers, sized by spending amount
+  const maxTotal=Math.max(...points.map(p=>p.total),1);
+  const bounds=[];
+  points.forEach(p=>{
+    const ratio=p.total/maxTotal;
+    const radius=8+ratio*20;
+    const color=ratio>0.66?'#C8593A':ratio>0.33?'#E8724E':'#2B6CB0';
+    const marker=L.circleMarker([p.lat,p.lon],{
+      radius,fillColor:color,color:'#fff',weight:2,opacity:1,fillOpacity:.8
+    }).addTo(MAP_INSTANCE);
+    marker.bindPopup(`<b>${esc(p.name)}</b><br>${p.count} 筆消費<br>${fA(p.total,t.currency)}（${fT(p.total*t.exchangeRate)}）`);
+    bounds.push([p.lat,p.lon]);
+  });
+  if(bounds.length>1)MAP_INSTANCE.fitBounds(bounds,{padding:[30,30]});
+
+  // Legend
+  if(legend){
+    const totalLocs=locKeys.length,foundLocs=points.length;
+    legend.innerHTML=`📍 共 ${foundLocs} 個地點${totalLocs>foundLocs?`（${totalLocs-foundLocs} 個無法定位）`:''}・圓圈大小代表消費金額`;
+  }
+}
+function openCompareModal(){
+  const body=document.getElementById('compare-body');
+  if(!body)return;
+  if(TRIPS.length<2){notify('需要至少 2 個旅程才能比較','err');return;}
+  // Calculate stats per trip in TWD
+  const stats=TRIPS.map(t=>{
+    const totTWD=t.expenses.reduce((s,e)=>s+(e.amountTWD||e.amount*t.exchangeRate),0);
+    const days=[...new Set(t.expenses.map(e=>fDate(e.datetime)).filter(d=>d!=='未知'))].length||1;
+    const avgDay=totTWD/days;
+    const cats={};
+    t.expenses.forEach(e=>{
+      const id=e.category;
+      const amtTWD=e.amountTWD||e.amount*t.exchangeRate;
+      cats[id]=(cats[id]||0)+amtTWD;
+    });
+    const topCat=Object.entries(cats).sort((a,b)=>b[1]-a[1])[0];
+    return{
+      id:t.id,name:t.name,country:t.country||'',currency:t.currency,
+      totalTWD:totTWD,count:t.expenses.length,days,avgDay,
+      topCatName:topCat?cat(topCat[0]).n:'-',
+      topCatAmt:topCat?topCat[1]:0,
+      cats,
+      budget:t.budget?t.budget*t.exchangeRate:null,
+      dateRange:fTripDateRange(t)
+    };
+  }).sort((a,b)=>b.totalTWD-a.totalTWD);
+
+  const maxTotal=Math.max(...stats.map(s=>s.totalTWD),1);
+  const maxAvgDay=Math.max(...stats.map(s=>s.avgDay),1);
+
+  // Total spending bars
+  let h='<div style="margin-bottom:18px"><h3 style="font-size:13px;margin-bottom:10px;color:var(--fg2)">總消費（台幣）</h3>';
+  stats.forEach(s=>{
+    const pct=s.totalTWD/maxTotal*100;
+    h+=`<div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+        <span style="font-weight:500">${esc(s.name)}</span>
+        <span style="font-weight:600">${fT(s.totalTWD)}</span>
+      </div>
+      <div style="height:8px;background:var(--bg2);border-radius:4px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:var(--accent);border-radius:4px;transition:width .4s"></div>
+      </div>
+      <div style="font-size:11px;color:var(--fg3);margin-top:2px">${s.country}・${s.dateRange||s.days+' 天'}</div>
+    </div>`;
+  });
+  h+='</div>';
+
+  // Daily average bars
+  h+='<div style="margin-bottom:18px"><h3 style="font-size:13px;margin-bottom:10px;color:var(--fg2)">每日平均消費（台幣）</h3>';
+  stats.forEach(s=>{
+    const pct=s.avgDay/maxAvgDay*100;
+    h+=`<div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+        <span>${esc(s.name)}</span>
+        <span style="font-weight:600">${fT(Math.round(s.avgDay))}/天</span>
+      </div>
+      <div style="height:8px;background:var(--bg2);border-radius:4px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:var(--blue);border-radius:4px;transition:width .4s"></div>
+      </div>
+    </div>`;
+  });
+  h+='</div>';
+
+  // Comparison table
+  h+=`<div style="margin-bottom:14px"><h3 style="font-size:13px;margin-bottom:10px;color:var(--fg2)">詳細比較</h3>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <tr style="border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:8px 4px;font-weight:600;color:var(--fg2)">旅程</th>
+        <th style="text-align:right;padding:8px 4px;font-weight:600;color:var(--fg2)">天數</th>
+        <th style="text-align:right;padding:8px 4px;font-weight:600;color:var(--fg2)">筆數</th>
+        <th style="text-align:right;padding:8px 4px;font-weight:600;color:var(--fg2)">最高分類</th>
+      </tr>`;
+  stats.forEach(s=>{
+    h+=`<tr style="border-bottom:1px solid var(--bg3)">
+      <td style="padding:8px 4px">${esc(s.name)}</td>
+      <td style="text-align:right;padding:8px 4px">${s.days}</td>
+      <td style="text-align:right;padding:8px 4px">${s.count}</td>
+      <td style="text-align:right;padding:8px 4px">${s.topCatName}<br><span style="color:var(--fg3);font-size:11px">${fT(Math.round(s.topCatAmt))}</span></td>
+    </tr>`;
+  });
+  h+='</table></div></div>';
+
+  // CP value insight
+  const cheapest=stats.reduce((a,b)=>a.avgDay<b.avgDay?a:b);
+  const expensive=stats.reduce((a,b)=>a.avgDay>b.avgDay?a:b);
+  if(cheapest.id!==expensive.id){
+    const ratio=(expensive.avgDay/cheapest.avgDay).toFixed(1);
+    h+=`<div style="background:var(--bg2);padding:12px 14px;border-radius:8px;font-size:12px;line-height:1.7;color:var(--fg2)">
+      💡 <b>${esc(cheapest.name)}</b> 平均每日花費最少（${fT(Math.round(cheapest.avgDay))}）<br>
+      <b>${esc(expensive.name)}</b> 是 <b>${esc(cheapest.name)}</b> 的 ${ratio} 倍
+    </div>`;
+  }
+
+  body.innerHTML=h;
+  document.getElementById('compare-modal').classList.remove('hidden');
+}
+function closeCompareModal(){document.getElementById('compare-modal').classList.add('hidden');}
 
 // ─── INVITE MODAL ─────────────────────────────────────────
 let INVITE_TRIP_ID=null;
