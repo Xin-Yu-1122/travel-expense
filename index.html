@@ -8,6 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="旅遊記帳">
+<link rel="manifest" href="manifest.json">
 <title>旅遊記帳本</title>
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -347,6 +348,13 @@ canvas{flex-shrink:0;display:block}
 .settle-row:last-child{border-bottom:none}
 .settle-arrow{color:var(--accent);font-weight:700;font-size:16px}
 .settle-amt{margin-left:auto;font-weight:600;color:var(--accent)}
+/* PWA install banner */
+.pwa-banner{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:520px;background:var(--card);border-top:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;gap:12px;z-index:200;box-shadow:0 -4px 20px rgba(0,0,0,.1);animation:slideUp .3s}
+@keyframes slideUp{from{transform:translateX(-50%) translateY(100%)}to{transform:translateX(-50%) translateY(0)}}
+.pwa-banner-icon{font-size:28px;flex-shrink:0}
+.pwa-banner-text{flex:1;font-size:13px;line-height:1.6;color:var(--fg2)}
+.pwa-banner-text b{color:var(--fg);display:block;font-size:14px;margin-bottom:2px}
+.pwa-banner-btns{display:flex;gap:8px;flex-shrink:0}
 /* NOTIFY */
 .notify{position:fixed;top:16px;left:50%;transform:translateX(-50%);padding:10px 18px;border-radius:20px;font-size:13px;z-index:300;box-shadow:0 4px 16px rgba(0,0,0,.2);white-space:nowrap;pointer-events:none}
 .notify.ok{background:var(--green);color:#fff}
@@ -813,6 +821,19 @@ canvas{flex-shrink:0;display:block}
   </div>
 </div>
 
+<!-- PWA INSTALL BANNER -->
+<div class="pwa-banner hidden" id="pwa-banner">
+  <span class="pwa-banner-icon">✈️</span>
+  <div class="pwa-banner-text">
+    <b>安裝旅遊記帳本</b>
+    加到主畫面，像 APP 一樣使用
+  </div>
+  <div class="pwa-banner-btns">
+    <button class="btn btn-ghost btn-sm" onclick="dismissPwaBanner()">之後</button>
+    <button class="btn btn-primary btn-sm" onclick="installPwa()">安裝</button>
+  </div>
+</div>
+
 <!-- NOTIFY -->
 <div class="notify hidden" id="notify"></div>
 
@@ -833,7 +854,7 @@ const firebaseConfig = {
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
-const APP_VERSION = 'v5.9';
+const APP_VERSION = 'v6.0';
 const APP_VERSION_DATE = '2026/04/25';
 let db, auth, fbUser=null;
 
@@ -2918,6 +2939,52 @@ function notify(msg,type='ok'){
 load();
 document.getElementById('setup').classList.remove('hidden');
 document.getElementById('app').classList.add('hidden');
+
+// ─── PWA: Service Worker + Install Prompt ─────────────────
+let deferredPrompt=null;
+
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('./sw.js').then(reg=>{
+    console.log('SW registered',reg.scope);
+  }).catch(err=>console.warn('SW registration failed',err));
+}
+
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault();
+  deferredPrompt=e;
+  const dismissed=localStorage.getItem('pwa-dismissed');
+  if(!dismissed||Date.now()-parseInt(dismissed)>7*24*60*60*1000){
+    setTimeout(()=>{
+      const banner=document.getElementById('pwa-banner');
+      if(banner)banner.classList.remove('hidden');
+    },3000);
+  }
+});
+
+function installPwa(){
+  const banner=document.getElementById('pwa-banner');
+  if(banner)banner.classList.add('hidden');
+  if(deferredPrompt){
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(result=>{
+      if(result.outcome==='accepted')notify('✓ 已安裝到主畫面！');
+      deferredPrompt=null;
+    });
+  }
+}
+
+function dismissPwaBanner(){
+  const banner=document.getElementById('pwa-banner');
+  if(banner)banner.classList.add('hidden');
+  localStorage.setItem('pwa-dismissed',Date.now().toString());
+}
+
+window.addEventListener('appinstalled',()=>{
+  const banner=document.getElementById('pwa-banner');
+  if(banner)banner.classList.add('hidden');
+  deferredPrompt=null;
+  notify('✓ 旅遊記帳本已安裝！');
+});
 </script>
 </body>
 </html>
