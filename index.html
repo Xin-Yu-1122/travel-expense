@@ -330,6 +330,15 @@ canvas{flex-shrink:0;display:block}
 .split-chk{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:20px;border:1px solid var(--border);font-size:13px;cursor:pointer;transition:.15s;background:var(--card)}
 .split-chk.active{background:var(--accent);color:#fff;border-color:var(--accent)}
 .split-chk:hover{border-color:var(--accent)}
+/* Split mode buttons */
+.split-mode-btn{padding:6px 14px;border-radius:20px;border:1px solid var(--border);background:var(--card);color:var(--fg2);font-size:12px;font-weight:500;cursor:pointer;transition:.15s;font-family:inherit}
+.split-mode-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.split-mode-btn:hover{border-color:var(--accent)}
+/* Custom split row */
+.split-custom-row{display:flex;align-items:center;gap:8px}
+.split-custom-row .split-avatar{font-size:20px;flex-shrink:0}
+.split-custom-row .split-name{font-size:13px;min-width:50px;flex:1}
+.split-custom-row .inp{width:90px;text-align:right;flex-shrink:0}
 /* Photo preview */
 .photo-thumb{width:100%;max-width:200px;border-radius:8px;border:1px solid var(--border);object-fit:cover}
 /* Settlement card */
@@ -531,9 +540,22 @@ canvas{flex-shrink:0;display:block}
         <label>誰付的錢？</label>
         <select class="inp" id="f-paidby"></select>
       </div>
-      <div class="field">
+      <div class="field" style="margin-bottom:10px">
+        <label>分攤方式</label>
+        <div style="display:flex;gap:6px;margin-top:4px">
+          <button type="button" class="split-mode-btn active" id="split-mode-equal" onclick="setSplitMode('equal')">均分</button>
+          <button type="button" class="split-mode-btn" id="split-mode-custom" onclick="setSplitMode('custom')">自訂金額</button>
+          <button type="button" class="split-mode-btn" id="split-mode-percent" onclick="setSplitMode('percent')">按比例</button>
+        </div>
+      </div>
+      <div class="field" id="split-equal-wrap">
         <label>哪些人分攤？</label>
         <div id="f-split-members" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px"></div>
+      </div>
+      <div class="field hidden" id="split-custom-wrap">
+        <label>各人分攤金額</label>
+        <div id="f-split-custom" style="display:flex;flex-direction:column;gap:8px;margin-top:6px"></div>
+        <div id="split-custom-hint" style="font-size:11px;color:var(--fg3);margin-top:6px"></div>
       </div>
     </div>
 
@@ -808,7 +830,7 @@ const firebaseConfig = {
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
-const APP_VERSION = 'v5.7';
+const APP_VERSION = 'v5.8';
 const APP_VERSION_DATE = '2026/04/25';
 let db, auth, fbUser=null;
 
@@ -1946,7 +1968,27 @@ function openEditExp(id){
   renderSplitFields();
   // restore split data
   if(e.paidBy){const pb=document.getElementById('f-paidby');if(pb)pb.value=e.paidBy;}
-  if(Array.isArray(e.splitAmong)){
+  // restore split mode
+  if(e.splitMode&&e.splitMode!=='equal'){
+    setSplitMode(e.splitMode);
+    // restore custom amounts
+    if(e.splitAmounts){
+      setTimeout(()=>{
+        document.querySelectorAll('[data-split-uid]').forEach(inp=>{
+          const uid=inp.dataset.splitUid;
+          if(e.splitAmounts[uid]!=null){
+            if(e.splitMode==='percent'){
+              // convert back to percentage
+              inp.value=e.amount>0?Math.round(e.splitAmounts[uid]/e.amount*100):'0';
+            }else{
+              inp.value=e.splitAmounts[uid];
+            }
+          }
+        });
+        updateSplitHint();
+      },50);
+    }
+  }else if(Array.isArray(e.splitAmong)){
     document.querySelectorAll('#f-split-members .split-chk').forEach(el=>{
       if(!e.splitAmong.includes(el.dataset.uid))el.classList.remove('active');
     });
@@ -2146,6 +2188,8 @@ function saveExpense(){
   const splitData=getSplitData();
   if(splitData.paidBy)exp.paidBy=splitData.paidBy;
   if(splitData.splitAmong.length)exp.splitAmong=splitData.splitAmong;
+  if(splitData.splitMode)exp.splitMode=splitData.splitMode;
+  if(splitData.splitAmounts&&Object.keys(splitData.splitAmounts).length)exp.splitAmounts=splitData.splitAmounts;
   // handle photo
   if(PHOTO_URL&&!PHOTO_FILE)exp.photoURL=PHOTO_URL; // existing photo
   const doSave=async()=>{
@@ -2392,6 +2436,19 @@ async function uploadPhoto(tripId,expId){
 }
 
 // ─── SPLIT EXPENSE ────────────────────────────────────────
+let SPLIT_MODE='equal'; // equal | custom | percent
+
+function setSplitMode(mode){
+  SPLIT_MODE=mode;
+  ['equal','custom','percent'].forEach(m=>{
+    const btn=document.getElementById('split-mode-'+m);
+    if(btn)btn.classList.toggle('active',m===mode);
+  });
+  document.getElementById('split-equal-wrap').classList.toggle('hidden',mode!=='equal');
+  document.getElementById('split-custom-wrap').classList.toggle('hidden',mode==='equal');
+  if(mode!=='equal')renderCustomSplitInputs();
+}
+
 function renderSplitFields(){
   const t=trip();if(!t)return;
   const members=t.members||{};
@@ -2399,28 +2456,92 @@ function renderSplitFields(){
   const avatars=t.memberAvatars||{};
   const memberIds=Object.keys(members);
   const sec=document.getElementById('split-section');
-  // only show if >1 member
   if(memberIds.length<=1){if(sec)sec.style.display='none';return;}
   if(sec)sec.style.display='block';
+  SPLIT_MODE='equal';
+  setSplitMode('equal');
   // paid by dropdown
   const pb=document.getElementById('f-paidby');
   if(pb){
     pb.innerHTML=memberIds.map(uid=>`<option value="${uid}">${avatars[uid]||'🐼'} ${esc(names[uid]||'成員')}</option>`).join('');
     pb.value=fbUser?.uid||memberIds[0];
   }
-  // split among checkboxes
+  // equal split checkboxes
   const sm=document.getElementById('f-split-members');
   if(sm){
     sm.innerHTML=memberIds.map(uid=>`<div class="split-chk active" data-uid="${uid}" onclick="toggleSplitMember(this)">${avatars[uid]||'🐼'} ${esc(names[uid]||'成員')}</div>`).join('');
   }
 }
+
+function renderCustomSplitInputs(){
+  const t=trip();if(!t)return;
+  const members=t.members||{};
+  const names=t.memberNames||{};
+  const avatars=t.memberAvatars||{};
+  const memberIds=Object.keys(members);
+  const wrap=document.getElementById('f-split-custom');
+  if(!wrap)return;
+  const isPercent=SPLIT_MODE==='percent';
+  const label=isPercent?'%':'金額';
+  const placeholder=isPercent?Math.round(100/memberIds.length):'0';
+  wrap.innerHTML=memberIds.map(uid=>`<div class="split-custom-row">
+    <span class="split-avatar">${avatars[uid]||'🐼'}</span>
+    <span class="split-name">${esc(names[uid]||'成員')}</span>
+    <input class="inp" type="number" min="0" step="any" placeholder="${placeholder}" data-split-uid="${uid}" oninput="updateSplitHint()"/>
+    <span style="font-size:12px;color:var(--fg3)">${isPercent?'%':t.currency}</span>
+  </div>`).join('');
+  updateSplitHint();
+}
+
+function updateSplitHint(){
+  const hint=document.getElementById('split-custom-hint');
+  if(!hint)return;
+  const t=trip();if(!t)return;
+  const inputs=document.querySelectorAll('[data-split-uid]');
+  const isPercent=SPLIT_MODE==='percent';
+  const totalAmt=parseFloat(document.getElementById('f-am')?.value)||0;
+  let sum=0;
+  inputs.forEach(inp=>{sum+=parseFloat(inp.value)||0;});
+  if(isPercent){
+    const diff=100-sum;
+    hint.innerHTML=diff===0?
+      `<span style="color:var(--green)">✓ 合計 100%</span>`:
+      `<span style="color:var(--accent)">合計 ${Math.round(sum)}%，${diff>0?'還差':'多了'} ${Math.abs(Math.round(diff))}%</span>`;
+  }else{
+    const diff=totalAmt-sum;
+    hint.innerHTML=Math.abs(diff)<1?
+      `<span style="color:var(--green)">✓ 合計 = 總金額 ${fA(totalAmt,t.currency)}</span>`:
+      `<span style="color:var(--accent)">合計 ${fA(sum,t.currency)}，${diff>0?'還差':'多了'} ${fA(Math.abs(diff),t.currency)}</span>`;
+  }
+}
+
 function toggleSplitMember(el){el.classList.toggle('active')}
+
 function getSplitData(){
   const paidBy=document.getElementById('f-paidby')?.value||fbUser?.uid||'';
-  const els=document.querySelectorAll('#f-split-members .split-chk.active');
-  const splitAmong=[...els].map(e=>e.dataset.uid).filter(Boolean);
-  if(!splitAmong.length&&paidBy)return{paidBy,splitAmong:[paidBy]};
-  return{paidBy,splitAmong};
+  const t=trip();
+  const memberIds=Object.keys(t?.members||{});
+  if(SPLIT_MODE==='equal'){
+    const els=document.querySelectorAll('#f-split-members .split-chk.active');
+    const splitAmong=[...els].map(e=>e.dataset.uid).filter(Boolean);
+    if(!splitAmong.length)return{paidBy,splitAmong:memberIds,splitMode:'equal'};
+    return{paidBy,splitAmong,splitMode:'equal'};
+  }else{
+    // custom or percent
+    const inputs=document.querySelectorAll('[data-split-uid]');
+    const splitAmounts={};
+    const splitAmong=[];
+    const totalAmt=parseFloat(document.getElementById('f-am')?.value)||0;
+    inputs.forEach(inp=>{
+      let val=parseFloat(inp.value)||0;
+      if(val>0){
+        if(SPLIT_MODE==='percent')val=totalAmt*val/100;
+        splitAmounts[inp.dataset.splitUid]=val;
+        splitAmong.push(inp.dataset.splitUid);
+      }
+    });
+    return{paidBy,splitAmong,splitMode:SPLIT_MODE,splitAmounts};
+  }
 }
 
 // ─── SETTLEMENT CALCULATION ───────────────────────────────
@@ -2431,17 +2552,22 @@ function calcSettlement(t){
   if(memberIds.length<=1)return[];
   const names=t.memberNames||{};
   const avatars=t.memberAvatars||{};
-  // calculate balances: positive = owed money, negative = owes money
   const balance={};
   memberIds.forEach(uid=>balance[uid]=0);
   t.expenses.forEach(e=>{
     const paidBy=e.paidBy||e.lastEditBy||memberIds[0];
-    const splitAmong=e.splitAmong||memberIds;
-    const share=e.amount/splitAmong.length;
     if(balance[paidBy]!=null)balance[paidBy]+=e.amount;
-    splitAmong.forEach(uid=>{if(balance[uid]!=null)balance[uid]-=share;});
+    // Use splitAmounts if custom/percent, otherwise equal split
+    if(e.splitAmounts&&Object.keys(e.splitAmounts).length){
+      Object.entries(e.splitAmounts).forEach(([uid,amt])=>{
+        if(balance[uid]!=null)balance[uid]-=amt;
+      });
+    }else{
+      const splitAmong=e.splitAmong||memberIds;
+      const share=e.amount/splitAmong.length;
+      splitAmong.forEach(uid=>{if(balance[uid]!=null)balance[uid]-=share;});
+    }
   });
-  // simplify debts
   const debts=[];
   const creditors=memberIds.filter(uid=>balance[uid]>0.5).map(uid=>({uid,amt:balance[uid]})).sort((a,b)=>b.amt-a.amt);
   const debtors=memberIds.filter(uid=>balance[uid]<-0.5).map(uid=>({uid,amt:-balance[uid]})).sort((a,b)=>b.amt-a.amt);
@@ -2472,10 +2598,16 @@ function renderSettlement(t){
   memberIds.forEach(uid=>{paid[uid]=0;shared[uid]=0;});
   t.expenses.forEach(e=>{
     const pb=e.paidBy||e.lastEditBy||memberIds[0];
-    const sa=e.splitAmong||memberIds;
     if(paid[pb]!=null)paid[pb]+=e.amount;
-    const share=e.amount/sa.length;
-    sa.forEach(uid=>{if(shared[uid]!=null)shared[uid]+=share;});
+    if(e.splitAmounts&&Object.keys(e.splitAmounts).length){
+      Object.entries(e.splitAmounts).forEach(([uid,amt])=>{
+        if(shared[uid]!=null)shared[uid]+=amt;
+      });
+    }else{
+      const sa=e.splitAmong||memberIds;
+      const share=e.amount/sa.length;
+      sa.forEach(uid=>{if(shared[uid]!=null)shared[uid]+=share;});
+    }
   });
   const memberRows=memberIds.map(uid=>{
     const diff=paid[uid]-shared[uid];
@@ -2531,9 +2663,26 @@ function renderSettlement(t){
       <label style="font-size:12px;font-weight:600;margin-bottom:4px;display:block">誰付的錢？</label>
       <select class="inp" id="batch-paidby">${paidByOpts}</select>
     </div>
-    <div class="field" style="margin-bottom:14px">
+    <div class="field" style="margin-bottom:10px">
+      <label style="font-size:12px;font-weight:600;margin-bottom:4px;display:block">分攤方式</label>
+      <div style="display:flex;gap:6px">
+        <button type="button" class="split-mode-btn active" id="batch-mode-equal" onclick="setBatchSplitMode('equal')">均分</button>
+        <button type="button" class="split-mode-btn" id="batch-mode-custom" onclick="setBatchSplitMode('custom')">自訂金額</button>
+      </div>
+    </div>
+    <div class="field" id="batch-equal-wrap" style="margin-bottom:14px">
       <label style="font-size:12px;font-weight:600;margin-bottom:6px;display:block">哪些人分攤？</label>
       <div style="display:flex;flex-wrap:wrap;gap:8px">${splitChks}</div>
+    </div>
+    <div class="field hidden" id="batch-custom-wrap" style="margin-bottom:14px">
+      <label style="font-size:12px;font-weight:600;margin-bottom:6px;display:block">各人分攤比例（%）</label>
+      <div id="batch-custom-inputs" style="display:flex;flex-direction:column;gap:6px">${memberIds.map(uid=>`<div class="split-custom-row">
+        <span class="split-avatar">${avatars[uid]||'🐼'}</span>
+        <span class="split-name">${esc(names[uid]||'')}</span>
+        <input class="inp" type="number" min="0" max="100" step="1" placeholder="${Math.round(100/memberIds.length)}" data-batch-pct="${uid}"/>
+        <span style="font-size:12px;color:var(--fg3)">%</span>
+      </div>`).join('')}</div>
+      <div style="font-size:11px;color:var(--fg3);margin-top:6px">每筆消費金額 × 各人比例 = 各人應分金額</div>
     </div>
     <button class="btn btn-primary btn-full" onclick="batchSetSplit()">套用分帳設定</button>
   </div>`:'';
@@ -2552,14 +2701,51 @@ function initBatchScope(){
   if(!sel||!dw)return;
   sel.onchange=()=>{dw.classList.toggle('hidden',sel.value!=='date');};
 }
+let BATCH_SPLIT_MODE='equal';
+function setBatchSplitMode(mode){
+  BATCH_SPLIT_MODE=mode;
+  ['equal','custom'].forEach(m=>{
+    const btn=document.getElementById('batch-mode-'+m);
+    if(btn)btn.classList.toggle('active',m===mode);
+  });
+  const ew=document.getElementById('batch-equal-wrap');
+  const cw=document.getElementById('batch-custom-wrap');
+  if(ew)ew.classList.toggle('hidden',mode!=='equal');
+  if(cw)cw.classList.toggle('hidden',mode==='equal');
+}
 async function batchSetSplit(){
   const t=trip();if(!t||!fbUser)return;
   const scope=document.getElementById('batch-scope')?.value||'all';
   const paidBy=document.getElementById('batch-paidby')?.value||fbUser.uid;
-  const activeEls=document.querySelectorAll('[data-buid].active');
-  const splitAmong=[...activeEls].map(el=>el.dataset.buid).filter(Boolean);
-  if(!splitAmong.length){notify('請至少選擇一位分攤成員','err');return;}
-  
+  const memberIds=Object.keys(t.members||{});
+
+  let splitAmong=[], splitMode='equal', splitAmounts=null;
+
+  if(BATCH_SPLIT_MODE==='equal'){
+    const activeEls=document.querySelectorAll('[data-buid].active');
+    splitAmong=[...activeEls].map(el=>el.dataset.buid).filter(Boolean);
+    if(!splitAmong.length){notify('請至少選擇一位分攤成員','err');return;}
+  }else{
+    // custom percentage mode - build percentages
+    const pctInputs=document.querySelectorAll('[data-batch-pct]');
+    const pcts={};
+    let totalPct=0;
+    splitAmong=[];
+    pctInputs.forEach(inp=>{
+      const pct=parseFloat(inp.value)||0;
+      if(pct>0){
+        pcts[inp.dataset.batchPct]=pct;
+        splitAmong.push(inp.dataset.batchPct);
+        totalPct+=pct;
+      }
+    });
+    if(!splitAmong.length){notify('請至少填入一位成員的比例','err');return;}
+    if(Math.abs(totalPct-100)>1){notify(`比例合計 ${totalPct}%，應為 100%`,'err');return;}
+    splitMode='custom';
+    // splitAmounts will be computed per expense below
+    splitAmounts=pcts; // store as percentages, convert per expense
+  }
+
   // filter expenses by scope
   let targets=[];
   if(scope==='unset')targets=t.expenses.filter(e=>!e.paidBy||!e.splitAmong);
@@ -2569,7 +2755,9 @@ async function batchSetSplit(){
   }else targets=[...t.expenses];
 
   if(!targets.length){notify('沒有符合條件的記錄','err');return;}
-  if(!confirm(`確定要將 ${targets.length} 筆記錄套用分帳設定？\n\n付款人：${(t.memberNames||{})[paidBy]||'成員'}\n分攤：${splitAmong.map(uid=>(t.memberNames||{})[uid]||'成員').join('、')}`))return;
+  const names=t.memberNames||{};
+  const modeLabel=BATCH_SPLIT_MODE==='equal'?'均分':'自訂比例';
+  if(!confirm(`確定要將 ${targets.length} 筆記錄套用「${modeLabel}」分帳設定？\n\n付款人：${names[paidBy]||'成員'}\n分攤：${splitAmong.map(uid=>names[uid]||'成員').join('、')}`))return;
 
   notify(`批次更新中… 0/${targets.length}`,'info');
   let done=0,errs=0;
@@ -2577,6 +2765,16 @@ async function batchSetSplit(){
     try{
       e.paidBy=paidBy;
       e.splitAmong=splitAmong;
+      if(BATCH_SPLIT_MODE==='custom'&&splitAmounts){
+        e.splitMode='custom';
+        e.splitAmounts={};
+        Object.entries(splitAmounts).forEach(([uid,pct])=>{
+          e.splitAmounts[uid]=Math.round(e.amount*pct/100);
+        });
+      }else{
+        e.splitMode='equal';
+        delete e.splitAmounts;
+      }
       await fbSaveExpense(t.id,e);
       done++;
       if(done%10===0)notify(`批次更新中… ${done}/${targets.length}`,'info');
