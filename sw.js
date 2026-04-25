@@ -1,69 +1,61 @@
-const CACHE_NAME = 'travel-expense-v6.1';
-const STATIC_ASSETS = [
-  './',
-  './index.html',
-  './manifest.json',
-  'https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Noto+Serif+TC:wght@400;600&display=swap'
-];
+// 旅遊記帳本 Service Worker
+const CACHE_NAME = 'travel-expense-v6.2';
 
-// Install: cache static assets
+// Install: 不預快取任何東西，避免外部資源失敗
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      return cache.addAll(STATIC_ASSETS).catch(err => {
-        console.warn('SW: some assets failed to cache', err);
-      });
-    })
-  );
   self.skipWaiting();
 });
 
-// Activate: clean old caches
+// Activate: 清掉舊快取，立即接管
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys => {
-      return Promise.all(
-        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
-      );
-    })
+    Promise.all([
+      caches.keys().then(keys =>
+        Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+      ),
+      self.clients.claim()
+    ])
   );
-  self.clients.claim();
 });
 
-// Fetch: network first, fallback to cache (for HTML/assets)
-// Firebase/Google API calls always go to network
+// Fetch: 只處理 GET 同源請求
 self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
-  
-  // Skip caching for Firebase, Google APIs, and auth
-  if (
-    url.hostname.includes('firestore.googleapis.com') ||
-    url.hostname.includes('firebase') ||
-    url.hostname.includes('googleapis.com') ||
-    url.hostname.includes('accounts.google.com') ||
-    url.hostname.includes('gstatic.com')
-  ) {
-    return; // Let browser handle normally
+  const req = event.request;
+  const url = new URL(req.url);
+
+  // 跳過非 GET、非同源、Firebase、Google 服務
+  if (req.method !== 'GET') return;
+  if (url.origin !== self.location.origin) return;
+  if (url.hostname.includes('firebase') || url.hostname.includes('googleapis')) return;
+
+  // HTML / navigate 請求：network first, cache fallback
+  if (req.mode === 'navigate' || req.destination === 'document') {
+    event.respondWith(
+      fetch(req)
+        .then(res => {
+          // 成功就快取一份
+          if (res && res.status === 200) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then(c => c.put(req, clone)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => caches.match(req).then(c => c || caches.match('./index.html')))
+    );
+    return;
   }
 
+  // 其他靜態資源：cache first
   event.respondWith(
-    fetch(event.request)
-      .then(response => {
-        // Cache successful GET responses
-        if (event.request.method === 'GET' && response.status === 200) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+    caches.match(req).then(cached => {
+      if (cached) return cached;
+      return fetch(req).then(res => {
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then(c => c.put(req, clone)).catch(() => {});
         }
-        return response;
-      })
-      .catch(() => {
-        // Offline: try cache
-        return caches.match(event.request).then(cached => {
-          return cached || new Response('離線中，部分功能可能無法使用', {
-            status: 503,
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' }
-          });
-        });
-      })
+        return res;
+      });
+    })
   );
 });

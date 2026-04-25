@@ -863,7 +863,7 @@ const firebaseConfig = {
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
-const APP_VERSION = 'v6.1';
+const APP_VERSION = 'v6.2';
 const APP_VERSION_DATE = '2026/04/25';
 let db, auth, fbUser=null;
 
@@ -3024,21 +3024,67 @@ window.addEventListener('appinstalled',()=>{
 
 // 從設定中觸發
 function triggerInstall(){
-  if(isPwaInstalled){notify('已經安裝了！','info');return;}
-  if(deferredPrompt){
-    installPwa();
-  }else if(isIOS){
-    showInstallBanner();
-  }else{
-    let msg='【無法直接觸發安裝】\n\n可能原因：\n';
-    if(!('serviceWorker' in navigator))msg+='• 瀏覽器不支援 PWA\n';
-    if(window.location.protocol!=='https:')msg+='• 必須使用 HTTPS\n';
-    msg+='\n💡 試試：\n';
-    if(isAndroid)msg+='• Chrome 選單（︙）→ 安裝應用程式\n';
-    else msg+='• 瀏覽器網址列右側找安裝圖示\n• 或使用 Chrome／Edge 開啟\n';
-    msg+='• Chrome 需要在站上互動 30 秒以上才會出現安裝按鈕';
-    alert(msg);
+  // 先關設定面板讓使用者看得到結果
+  closeSettings();
+  if(isPwaInstalled){
+    setTimeout(()=>notify('已經安裝了！','info'),200);
+    return;
   }
+  // Chrome/Android 有 deferredPrompt 直接觸發系統安裝
+  if(deferredPrompt){
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(result=>{
+      if(result.outcome==='accepted')notify('✓ 已安裝到主畫面！');
+      else notify('已取消安裝','info');
+      deferredPrompt=null;
+    });
+    return;
+  }
+  // 其他情況：彈出指示視窗
+  showInstallInstructions();
+}
+
+function showInstallInstructions(){
+  const modal=document.getElementById('install-modal');
+  const body=document.getElementById('install-modal-body');
+  if(!modal||!body)return;
+  const ua=navigator.userAgent;
+  const isChrome=/Chrome/.test(ua)&&!/Edg/.test(ua);
+  const isEdge=/Edg/.test(ua);
+  const isSafari=/Safari/.test(ua)&&!/Chrome/.test(ua);
+  let html='';
+  if(isIOS){
+    html=`<p style="margin-bottom:12px">iPhone / iPad 使用 Safari：</p>
+      <ol style="padding-left:20px;line-height:2">
+        <li>點底部 <span style="display:inline-block;border:1px solid var(--border);padding:1px 6px;border-radius:4px;font-weight:600">⬆ 分享</span> 按鈕</li>
+        <li>滑到「<b>加入主畫面</b>」</li>
+        <li>右上角點「新增」</li>
+      </ol>
+      <p style="margin-top:12px;color:var(--fg3);font-size:12px">如果用的是 Chrome / Edge，請改用 Safari 開啟此網頁。</p>`;
+  }else if(isAndroid){
+    html=`<p style="margin-bottom:12px">Android 使用 Chrome：</p>
+      <ol style="padding-left:20px;line-height:2">
+        <li>點右上角 <b>選單（︙）</b></li>
+        <li>選「<b>加到主畫面</b>」或「<b>安裝應用程式</b>」</li>
+        <li>確認名稱後點「新增」</li>
+      </ol>
+      <p style="margin-top:12px;color:var(--fg3);font-size:12px">在站上停留 30 秒並點選互動後，瀏覽器才會啟用安裝功能。</p>`;
+  }else if(isChrome||isEdge){
+    html=`<p style="margin-bottom:12px">電腦版 ${isEdge?'Edge':'Chrome'}：</p>
+      <ol style="padding-left:20px;line-height:2">
+        <li>網址列右側找 <b>⊕ 安裝圖示</b></li>
+        <li>或點右上 ⋯ → <b>安裝旅遊記帳本</b></li>
+      </ol>
+      <p style="margin-top:12px;color:var(--fg3);font-size:12px">需要在站上互動 30 秒以上，安裝圖示才會出現。如果沒看到，多滾動或點幾下，等一下再試。</p>`;
+  }else{
+    html=`<p style="margin-bottom:12px">建議使用 Chrome 或 Edge 開啟此網頁，安裝功能比較完整。</p>
+      <p style="color:var(--fg3);font-size:12px">Firefox 不支援 PWA 安裝。Safari 須使用 iPhone / iPad / macOS。</p>`;
+  }
+  body.innerHTML=html;
+  modal.classList.remove('hidden');
+}
+function closeInstallModal(){
+  document.getElementById('install-modal').classList.add('hidden');
 }
 
 // iOS 5 秒後顯示手動指示
