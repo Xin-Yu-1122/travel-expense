@@ -553,8 +553,11 @@ canvas{flex-shrink:0;display:block}
         <div id="f-split-members" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px"></div>
       </div>
       <div class="field hidden" id="split-custom-wrap">
-        <label>各人分攤金額</label>
-        <div id="f-split-custom" style="display:flex;flex-direction:column;gap:8px;margin-top:6px"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label>各人分攤金額</label>
+          <div style="display:flex;gap:4px" id="split-cur-toggle"></div>
+        </div>
+        <div id="f-split-custom" style="display:flex;flex-direction:column;gap:8px"></div>
         <div id="split-custom-hint" style="font-size:11px;color:var(--fg3);margin-top:6px"></div>
       </div>
     </div>
@@ -830,7 +833,7 @@ const firebaseConfig = {
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
-const APP_VERSION = 'v5.8';
+const APP_VERSION = 'v5.9';
 const APP_VERSION_DATE = '2026/04/25';
 let db, auth, fbUser=null;
 
@@ -1911,6 +1914,7 @@ function _resetAddForm(){
 function openAdd(){
   _resetAddForm();
   removePhoto();
+  SPLIT_CUSTOM_CUR='foreign';
   document.getElementById('add-screen').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
   renderSplitFields();
@@ -2473,6 +2477,8 @@ function renderSplitFields(){
   }
 }
 
+let SPLIT_CUSTOM_CUR='foreign'; // 'foreign' or 'twd'
+
 function renderCustomSplitInputs(){
   const t=trip();if(!t)return;
   const members=t.members||{};
@@ -2482,15 +2488,31 @@ function renderCustomSplitInputs(){
   const wrap=document.getElementById('f-split-custom');
   if(!wrap)return;
   const isPercent=SPLIT_MODE==='percent';
-  const label=isPercent?'%':'金額';
+  // Currency toggle (only for custom amount mode, not percent)
+  const toggle=document.getElementById('split-cur-toggle');
+  if(toggle){
+    if(isPercent){
+      toggle.innerHTML='';
+    }else{
+      toggle.innerHTML=`
+        <button type="button" class="split-mode-btn${SPLIT_CUSTOM_CUR==='foreign'?' active':''}" onclick="setSplitCur('foreign')" style="font-size:11px;padding:4px 10px">${t.currency}</button>
+        <button type="button" class="split-mode-btn${SPLIT_CUSTOM_CUR==='twd'?' active':''}" onclick="setSplitCur('twd')" style="font-size:11px;padding:4px 10px">TWD</button>`;
+    }
+  }
+  const curLabel=isPercent?'%':(SPLIT_CUSTOM_CUR==='twd'?'TWD':t.currency);
   const placeholder=isPercent?Math.round(100/memberIds.length):'0';
   wrap.innerHTML=memberIds.map(uid=>`<div class="split-custom-row">
     <span class="split-avatar">${avatars[uid]||'🐼'}</span>
     <span class="split-name">${esc(names[uid]||'成員')}</span>
     <input class="inp" type="number" min="0" step="any" placeholder="${placeholder}" data-split-uid="${uid}" oninput="updateSplitHint()"/>
-    <span style="font-size:12px;color:var(--fg3)">${isPercent?'%':t.currency}</span>
+    <span style="font-size:12px;color:var(--fg3);min-width:28px">${curLabel}</span>
   </div>`).join('');
   updateSplitHint();
+}
+
+function setSplitCur(cur){
+  SPLIT_CUSTOM_CUR=cur;
+  renderCustomSplitInputs();
 }
 
 function updateSplitHint(){
@@ -2499,7 +2521,9 @@ function updateSplitHint(){
   const t=trip();if(!t)return;
   const inputs=document.querySelectorAll('[data-split-uid]');
   const isPercent=SPLIT_MODE==='percent';
+  const isTWD=SPLIT_CUSTOM_CUR==='twd'&&!isPercent;
   const totalAmt=parseFloat(document.getElementById('f-am')?.value)||0;
+  const totalInCur=isTWD?totalAmt*t.exchangeRate:totalAmt;
   let sum=0;
   inputs.forEach(inp=>{sum+=parseFloat(inp.value)||0;});
   if(isPercent){
@@ -2508,10 +2532,13 @@ function updateSplitHint(){
       `<span style="color:var(--green)">✓ 合計 100%</span>`:
       `<span style="color:var(--accent)">合計 ${Math.round(sum)}%，${diff>0?'還差':'多了'} ${Math.abs(Math.round(diff))}%</span>`;
   }else{
-    const diff=totalAmt-sum;
+    const target=isTWD?totalInCur:totalAmt;
+    const curLabel=isTWD?'TWD':t.currency;
+    const diff=target-sum;
+    const convNote=isTWD?` （外幣 ${fA(totalAmt,t.currency)}）`:'';
     hint.innerHTML=Math.abs(diff)<1?
-      `<span style="color:var(--green)">✓ 合計 = 總金額 ${fA(totalAmt,t.currency)}</span>`:
-      `<span style="color:var(--accent)">合計 ${fA(sum,t.currency)}，${diff>0?'還差':'多了'} ${fA(Math.abs(diff),t.currency)}</span>`;
+      `<span style="color:var(--green)">✓ 合計 = 總金額${convNote}</span>`:
+      `<span style="color:var(--accent)">合計 ${Math.round(sum)} ${curLabel}，${diff>0?'還差':'多了'} ${Math.abs(Math.round(diff))} ${curLabel}${convNote}</span>`;
   }
 }
 
@@ -2527,16 +2554,22 @@ function getSplitData(){
     if(!splitAmong.length)return{paidBy,splitAmong:memberIds,splitMode:'equal'};
     return{paidBy,splitAmong,splitMode:'equal'};
   }else{
-    // custom or percent
     const inputs=document.querySelectorAll('[data-split-uid]');
     const splitAmounts={};
     const splitAmong=[];
     const totalAmt=parseFloat(document.getElementById('f-am')?.value)||0;
+    const isPercent=SPLIT_MODE==='percent';
+    const isTWD=SPLIT_CUSTOM_CUR==='twd'&&!isPercent;
     inputs.forEach(inp=>{
       let val=parseFloat(inp.value)||0;
       if(val>0){
-        if(SPLIT_MODE==='percent')val=totalAmt*val/100;
-        splitAmounts[inp.dataset.splitUid]=val;
+        if(isPercent){
+          val=totalAmt*val/100;
+        }else if(isTWD&&t){
+          // Convert TWD input to foreign currency
+          val=val/t.exchangeRate;
+        }
+        splitAmounts[inp.dataset.splitUid]=Math.round(val*100)/100;
         splitAmong.push(inp.dataset.splitUid);
       }
     });
