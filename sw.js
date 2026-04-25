@@ -1,5 +1,5 @@
 // 旅遊記帳本 Service Worker
-const CACHE_NAME = 'travel-expense-v6.4';
+const CACHE_NAME = 'travel-expense-v6.5';
 
 // Install: 不預快取任何東西，避免外部資源失敗
 self.addEventListener('install', event => {
