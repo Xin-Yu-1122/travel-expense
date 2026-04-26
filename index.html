@@ -890,8 +890,8 @@ const firebaseConfig = {
 // ════════════════════════════════════════════════════════════
 
 // ─── Firebase 初始化 ───────────────────────────────────────
-const APP_VERSION = 'v6.5';
-const APP_VERSION_DATE = '2026/04/25';
+const APP_VERSION = 'v6.6';
+const APP_VERSION_DATE = '2026/04/26';
 let db, auth, fbUser=null;
 
 // ─── 深色模式 ──────────────────────────────────────────────
@@ -1174,27 +1174,40 @@ function setExpView(v){EXP_VIEW=v;renderTrip();}
 let SEARCH_DEBOUNCE=null;
 let SEARCH_COMPOSING=false;
 function onSearchInput(inp){
-  // 注音/中文輸入法組字中：先記下值但不觸發過濾
   if(SEARCH_COMPOSING)return;
   if(SEARCH_DEBOUNCE)clearTimeout(SEARCH_DEBOUNCE);
   SEARCH_DEBOUNCE=setTimeout(()=>{
     EXP_SEARCH=inp.value;
-    renderTrip();
-    // 重新聚焦回搜尋框並還原游標
-    setTimeout(()=>{
-      const newInp=document.getElementById('exp-search-inp');
-      if(newInp){newInp.focus();newInp.setSelectionRange(newInp.value.length,newInp.value.length);}
-    },10);
-  },300);
+    updateExpListOnly(); // 只更新列表，不動 search input
+  },250);
 }
 function onSearchCompositionStart(){SEARCH_COMPOSING=true;}
 function onSearchCompositionEnd(inp){
   SEARCH_COMPOSING=false;
-  // 組字結束後再觸發過濾
-  onSearchInput(inp);
+  if(SEARCH_DEBOUNCE)clearTimeout(SEARCH_DEBOUNCE);
+  SEARCH_DEBOUNCE=setTimeout(()=>{
+    EXP_SEARCH=inp.value;
+    updateExpListOnly();
+  },50);
 }
-function setExpSearch(v){EXP_SEARCH=v;renderTrip();setTimeout(()=>{const inp=document.getElementById('exp-search-inp');if(inp){inp.focus();inp.setSelectionRange(inp.value.length,inp.value.length);}},10);}
-function clearExpSearch(){EXP_SEARCH='';if(SEARCH_DEBOUNCE)clearTimeout(SEARCH_DEBOUNCE);renderTrip();}
+function setExpSearch(v){EXP_SEARCH=v;updateExpListOnly();}
+function clearExpSearch(){
+  EXP_SEARCH='';
+  if(SEARCH_DEBOUNCE)clearTimeout(SEARCH_DEBOUNCE);
+  const inp=document.getElementById('exp-search-inp');if(inp)inp.value='';
+  updateExpListOnly();
+}
+// 只更新列表內容和摘要列，不動搜尋框本身
+function updateExpListOnly(){
+  const t=trip();if(!t)return;
+  const container=document.getElementById('exp-list-container');
+  if(!container){renderTrip();return;}
+  container.innerHTML=renderExpList(t);
+  // 重新綁定按鈕事件
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=e=>{e.stopPropagation();delExp(b.dataset.del)});
+  document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=e=>{e.stopPropagation();openEditExp(b.dataset.edit)});
+  if(EXP_VIEW==='grouped'&&!EXP_SEARCH)initDrag();
+}
 function expMatchesSearch(e,q){
   if(!q)return true;
   const lc=q.toLowerCase();
@@ -1475,18 +1488,28 @@ function switchTab(tab){CUR_TAB=tab;expStatus=null;renderTrip()}
 // ─── EXPENSES TAB ─────────────────────────────────────────
 function toggleDay(date){COLLAPSED['d:'+date]=!COLLAPSED['d:'+date];renderTrip()}
 function toggleStore(key){COLLAPSED['s:'+key]=!COLLAPSED['s:'+key];renderTrip()}
+function toggleTimeline(date){COLLAPSED['t:'+date]=!COLLAPSED['t:'+date];updateExpListOnly();}
 
 function renderExpenses(t){
   if(!t.expenses.length)return`<div class="exp-content"><div class="empty-state"><div class="empty-icon">🧾</div><p>還沒有消費記錄<br>點右下角 <strong>+</strong> 新增第一筆</p></div></div>`;
 
-  // Search bar
+  // Search bar — 永遠靜態渲染一次，後續不會被覆蓋
   const q=EXP_SEARCH;
-  const searchBar=`<div style="padding:0 16px 12px">
+  const searchBar=`<div style="padding:16px 16px 12px">
     <div style="position:relative">
       <input type="text" class="inp" id="exp-search-inp" placeholder="🔍 搜尋商品、店家、地點、備註…" value="${esc(q)}" oninput="onSearchInput(this)" oncompositionstart="onSearchCompositionStart()" oncompositionend="onSearchCompositionEnd(this)" style="padding-right:36px" autocomplete="off"/>
-      ${q?`<button onclick="clearExpSearch()" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);width:24px;height:24px;border-radius:50%;border:none;background:var(--bg3);color:var(--fg2);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center">×</button>`:''}
+      <button onclick="clearExpSearch()" id="exp-search-clear" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);width:24px;height:24px;border-radius:50%;border:none;background:var(--bg3);color:var(--fg2);cursor:pointer;font-size:14px;align-items:center;justify-content:center;display:${q?'flex':'none'}">×</button>
     </div>
   </div>`;
+
+  return searchBar+`<div id="exp-list-container">${renderExpList(t)}</div>`;
+}
+
+// 列表內容：搜尋摘要 + 檢視切換 + 列表本身
+function renderExpList(t){
+  const q=EXP_SEARCH;
+  // 同步顯示/隱藏清除按鈕
+  setTimeout(()=>{const cl=document.getElementById('exp-search-clear');if(cl)cl.style.display=q?'flex':'none';},0);
 
   // Filter expenses
   const filtered=q?t.expenses.filter(e=>expMatchesSearch(e,q)):t.expenses;
@@ -1497,33 +1520,28 @@ function renderExpenses(t){
     const filteredTot=filtered.reduce((s,e)=>s+e.amount,0);
     const filteredTotTWD=filtered.reduce((s,e)=>s+(e.amountTWD||e.amount*t.exchangeRate),0);
     if(!filtered.length){
-      summaryBar=`<div style="padding:24px 16px;text-align:center;color:var(--fg3)">
+      return`<div style="padding:24px 16px;text-align:center;color:var(--fg3)">
         <div style="font-size:32px;margin-bottom:8px">🔍</div>
         <div>找不到符合「${esc(q)}」的記錄</div>
       </div>`;
-    }else{
-      // Count by store for price-comparison hint
-      const byStore={};
-      filtered.forEach(e=>{
-        const k=e.storeName||'(無店家)';
-        if(!byStore[k])byStore[k]={count:0,total:0,minAmt:Infinity,maxAmt:0};
-        byStore[k].count++;
-        byStore[k].total+=e.amount;
-        byStore[k].minAmt=Math.min(byStore[k].minAmt,e.amount);
-        byStore[k].maxAmt=Math.max(byStore[k].maxAmt,e.amount);
-      });
-      const storeCount=Object.keys(byStore).length;
-      const minPrice=Math.min(...filtered.map(e=>e.amount));
-      const maxPrice=Math.max(...filtered.map(e=>e.amount));
-      const priceCompareHint=filtered.length>1&&minPrice<maxPrice?`<div style="margin-top:6px;font-size:11px;color:var(--blue)">💡 比價：最低 ${fA(minPrice,t.currency)} ↔ 最高 ${fA(maxPrice,t.currency)}（差 ${fA(maxPrice-minPrice,t.currency)}）</div>`:'';
-      summaryBar=`<div style="margin:0 16px 12px;padding:10px 14px;background:var(--bg2);border-radius:8px;font-size:12px">
-        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
-          <span style="color:var(--fg2)">找到 <b>${filtered.length}</b> 筆${storeCount>1?`・<b>${storeCount}</b> 家店`:''}</span>
-          <span style="font-weight:600">${fA(filteredTot,t.currency)}（${fT(filteredTotTWD)}）</span>
-        </div>
-        ${priceCompareHint}
-      </div>`;
     }
+    const byStore={};
+    filtered.forEach(e=>{
+      const k=e.storeName||'(無店家)';
+      if(!byStore[k])byStore[k]={count:0,total:0};
+      byStore[k].count++;byStore[k].total+=e.amount;
+    });
+    const storeCount=Object.keys(byStore).length;
+    const minPrice=Math.min(...filtered.map(e=>e.amount));
+    const maxPrice=Math.max(...filtered.map(e=>e.amount));
+    const priceCompareHint=filtered.length>1&&minPrice<maxPrice?`<div style="margin-top:6px;font-size:11px;color:var(--blue)">💡 比價：最低 ${fA(minPrice,t.currency)} ↔ 最高 ${fA(maxPrice,t.currency)}（差 ${fA(maxPrice-minPrice,t.currency)}）</div>`:'';
+    summaryBar=`<div style="margin:0 16px 12px;padding:10px 14px;background:var(--bg2);border-radius:8px;font-size:12px">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+        <span style="color:var(--fg2)">找到 <b>${filtered.length}</b> 筆${storeCount>1?`・<b>${storeCount}</b> 家店`:''}</span>
+        <span style="font-weight:600">${fA(filteredTot,t.currency)}（${fT(filteredTotTWD)}）</span>
+      </div>
+      ${priceCompareHint}
+    </div>`;
   }
 
   // View mode toggle
@@ -1533,58 +1551,68 @@ function renderExpenses(t){
     <button class="split-mode-btn ${EXP_VIEW==='timeline'?'active':''}" onclick="setExpView('timeline')" style="font-size:11px;padding:4px 10px">📋 時間軸</button>
   </div>`;
 
-  // No matches early return
-  if(q&&!filtered.length){
-    return searchBar+summaryBar;
-  }
-
   // Timeline view (or auto-switch when searching)
   if(EXP_VIEW==='timeline'||q){
     const sorted=[...filtered].sort((a,b)=>(b.datetime||'').localeCompare(a.datetime||''));
-    let lastDate='';
-    let h2=searchBar+summaryBar+viewToggle+'<div class="exp-content" style="padding-top:0"><div style="position:relative">';
-    sorted.forEach(e=>{
-      const date=fDate(e.datetime);
-      const c=cat(e.category);
-      const showDateHeader=date!==lastDate;
-      lastDate=date;
-      const memberInfo=t.members&&Object.keys(t.members).length>1&&e.paidBy?`<span style="font-size:10px;color:var(--fg3);background:var(--bg2);padding:1px 6px;border-radius:8px;margin-left:6px">${(t.memberAvatars||{})[e.paidBy]||'🐼'} ${(t.memberNames||{})[e.paidBy]||'?'}</span>`:'';
-      const photoIcon=e.photoURL?`<span style="font-size:11px;margin-left:4px" title="有發票照片">📷</span>`:'';
-      if(showDateHeader)h2+=`<div style="font-size:12px;color:var(--fg3);font-weight:600;padding:14px 0 6px;letter-spacing:.05em">${date}</div>`;
-      h2+=`<div class="timeline-row" style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);align-items:flex-start">
-        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.c};margin-top:6px;flex-shrink:0"></span>
-        <div style="flex:1;min-width:0">
-          <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:2px">
-            <span style="font-weight:500;font-size:14px">${highlightSearch(e.nameZh||'',q)}${photoIcon}</span>
-            <span style="font-weight:600;color:var(--fg);white-space:nowrap">${fA(e.amount,t.currency)}</span>
+    // 按日期分組
+    const tlByDate={};
+    sorted.forEach(e=>{const k=fDate(e.datetime);if(!tlByDate[k])tlByDate[k]=[];tlByDate[k].push(e);});
+    let h2=summaryBar+viewToggle+'<div class="exp-content" style="padding-top:0">';
+    Object.entries(tlByDate).forEach(([date,items])=>{
+      const dt=items.reduce((s,e)=>s+e.amount,0);
+      const dtTWD=items.reduce((s,e)=>s+(e.amountTWD||e.amount*t.exchangeRate),0);
+      // 搜尋時自動展開，否則用 COLLAPSED 狀態
+      const collapsed=!q&&!!COLLAPSED['t:'+date];
+      h2+=`<div style="margin-bottom:8px">
+        <div onclick="toggleTimeline('${date}')" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--bg2);border-radius:8px;cursor:pointer;font-weight:600">
+          <span style="font-size:13px">${date}</span>
+          <div style="display:flex;align-items:center;gap:10px;font-size:12px">
+            <span style="color:var(--fg3);font-weight:400">${fT(dtTWD)}</span>
+            <span>${fA(dt,t.currency)}</span>
+            <span style="font-size:10px;color:var(--fg3);transform:${collapsed?'rotate(-90deg)':'rotate(0)'};transition:transform .2s">▾</span>
           </div>
-          <div style="font-size:11px;color:var(--fg3);display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-            <span>${highlightSearch(e.storeName||'',q)}</span>
-            ${e.storeName?`<span>·</span>`:''}
-            <span>${c.n}</span>
-            <span>·</span>
-            <span>${fT(e.amountTWD||e.amount*t.exchangeRate)}</span>
-            ${e.location?`<span>·</span><span>📍 ${highlightSearch(e.location,q)}</span>`:''}
-            ${memberInfo}
-          </div>
-          ${e.notes?`<div style="font-size:11px;color:var(--fg3);margin-top:2px">📝 ${highlightSearch(e.notes,q)}</div>`:''}
-          ${canEdit(t)?`<div style="margin-top:4px;display:flex;gap:8px">
-            <button class="exp-act-btn exp-edit-btn" data-edit="${e.id}" style="font-size:11px">編輯</button>
-            <button class="exp-act-btn exp-del-btn" data-del="${e.id}" style="font-size:11px">刪除</button>
-          </div>`:''}
         </div>
-      </div>`;
+        <div style="${collapsed?'display:none':''}">`;
+      items.forEach(e=>{
+        const c=cat(e.category);
+        const memberInfo=t.members&&Object.keys(t.members).length>1&&e.paidBy?`<span style="font-size:10px;color:var(--fg3);background:var(--bg2);padding:1px 6px;border-radius:8px;margin-left:6px">${(t.memberAvatars||{})[e.paidBy]||'🐼'} ${(t.memberNames||{})[e.paidBy]||'?'}</span>`:'';
+        const photoIcon=e.photoURL?`<span style="font-size:11px;margin-left:4px" title="有發票照片">📷</span>`:'';
+        h2+=`<div class="timeline-row" style="display:flex;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);align-items:flex-start">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.c};margin-top:6px;flex-shrink:0"></span>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:2px">
+              <span style="font-weight:500;font-size:14px">${highlightSearch(e.nameZh||'',q)}${photoIcon}</span>
+              <span style="font-weight:600;color:var(--fg);white-space:nowrap">${fA(e.amount,t.currency)}</span>
+            </div>
+            <div style="font-size:11px;color:var(--fg3);display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+              <span>${highlightSearch(e.storeName||'',q)}</span>
+              ${e.storeName?`<span>·</span>`:''}
+              <span>${c.n}</span>
+              <span>·</span>
+              <span>${fT(e.amountTWD||e.amount*t.exchangeRate)}</span>
+              ${e.location?`<span>·</span><span>📍 ${highlightSearch(e.location,q)}</span>`:''}
+              ${memberInfo}
+            </div>
+            ${e.notes?`<div style="font-size:11px;color:var(--fg3);margin-top:2px">📝 ${highlightSearch(e.notes,q)}</div>`:''}
+            ${canEdit(t)?`<div style="margin-top:4px;display:flex;gap:8px">
+              <button class="exp-act-btn exp-edit-btn" data-edit="${e.id}" style="font-size:11px">編輯</button>
+              <button class="exp-act-btn exp-del-btn" data-del="${e.id}" style="font-size:11px">刪除</button>
+            </div>`:''}
+          </div>
+        </div>`;
+      });
+      h2+='</div></div>';
     });
-    h2+='</div></div>';
+    h2+='</div>';
     return h2;
   }
 
-  // Grouped view (original) - q is empty here
+  // Grouped view (original)
   const byDate={};
   [...filtered].sort((a,b)=>fDate(b.datetime).localeCompare(fDate(a.datetime)))
     .forEach(e=>{const k=fDate(e.datetime);if(!byDate[k])byDate[k]=[];byDate[k].push(e)});
 
-  let h=searchBar+viewToggle+'<div class="exp-content" style="padding-top:0" id="exp-list">';
+  let h=summaryBar+viewToggle+'<div class="exp-content" style="padding-top:0" id="exp-list">';
   Object.entries(byDate).sort((a,b)=>b[0].localeCompare(a[0])).forEach(([date,exps])=>{
     const dt=exps.reduce((s,e)=>s+e.amount,0);
     const dtTWD=exps.reduce((s,e)=>s+(e.amountTWD||e.amount*t.exchangeRate),0);
